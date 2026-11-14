@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: diet-dekho-whatsapp-bot
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: FINBITE_API_KEY
+        value: 8c80a778aa11a4d527b7631e517e6106af077aad9d3a435a10e5c8dc42eb4eaf
+      - key: FINBITE_PHONE_ID
+        value: 699877843205192
+      - key: FINBITE_BASE_URL
+        value: https://automate.finbite.in/api
+      - key: NEODOVE_WEBHOOK_URL
+        sync: false
+      - key: WEBHOOK_VERIFY_TOKEN
+        value: dietdekho_secure_token_123
