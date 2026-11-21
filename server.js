@@ -8,6 +8,24 @@ const { scheduleFollowup, cancelFollowup } = require('./followup');
 const app = express();
 app.use(express.json());
 
+// In-memory debug logs
+const debugLogs = [];
+function addDebugLog(msg, data = null) {
+  const entry = { time: new Date().toISOString(), msg, data };
+  debugLogs.push(entry);
+  if (debugLogs.length > 50) debugLogs.shift();
+  console.log(`[${entry.time}] ${msg}`, data ? JSON.stringify(data) : '');
+}
+
+app.get('/debug', (req, res) => {
+  res.json({
+    status: 'online',
+    totalSessions: sessions.size,
+    recentLogs: debugLogs.slice(-20)
+  });
+});
+
+
 // In-memory session store: { [phone]: { history: [], leadData: {}, lastUpdated: Date } }
 const sessions = new Map();
 
@@ -62,7 +80,7 @@ app.post('/webhook', async (req, res) => {
 
   try {
     const body = req.body;
-    console.log('[Incoming Webhook Body]:', JSON.stringify(body, null, 2));
+    addDebugLog('Incoming Webhook', body);
 
     let senderPhone = null;
     let incomingText = null;
@@ -106,7 +124,7 @@ app.post('/webhook', async (req, res) => {
       setTimeout(() => processedMessageIds.delete(messageId), 10 * 60 * 1000);
     }
 
-    console.log(`[Message Received] From: ${senderPhone} | Text: "${incomingText}"`);
+    addDebugLog(`Message Received from ${senderPhone}: "${incomingText}"`);
 
     // Reset any pending follow-up since the user has replied!
     cancelFollowup(senderPhone);
@@ -114,7 +132,8 @@ app.post('/webhook', async (req, res) => {
     const session = getSession(senderPhone);
 
     // Call Gemini with user message and history
-    const { replyText, leadData } = await generateGeminiReply(session.history, incomingText);
+    const { replyText, leadData, interactionId } = await generateGeminiReply(session.history, incomingText, session.interactionId);
+    if (interactionId) session.interactionId = interactionId;
 
     // Update conversation history
     session.history.push({ role: 'user', text: incomingText });
@@ -142,7 +161,7 @@ app.post('/webhook', async (req, res) => {
     scheduleFollowup(senderPhone, session.history, session.leadData);
 
   } catch (error) {
-    console.error('[Webhook Processing Error]:', error);
+    addDebugLog('Webhook Processing Error', error.message || error);
   }
 });
 
