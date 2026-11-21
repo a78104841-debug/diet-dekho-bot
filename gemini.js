@@ -2,8 +2,9 @@ const axios = require('axios');
 const systemPrompt = require('./system_prompt');
 
 /**
- * Call Gemini API using modern Interactions API (preferred for gemini-3.8-flash)
- * with automatic fallback to generateContent and Groq if configured.
+ * Call AI Engine for Diet Dekho WhatsApp Bot.
+ * Prioritizes Groq (Llama 3.1 8B Instant) - available to 100% of free Groq accounts.
+ * Includes automatic model cycling and error handling.
  * 
  * @param {Array<{role: string, text: string}>} history 
  * @param {string} userMessage 
@@ -11,19 +12,63 @@ const systemPrompt = require('./system_prompt');
  * @returns {Promise<{replyText: string, leadData: object|null, interactionId: string|null}>}
  */
 async function generateGeminiReply(history = [], userMessage = '', previousInteractionId = null) {
-  const apiKey = process.env.GEMINI_API_KEY;
   const groqKey = process.env.GROQ_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY;
 
-  if (!apiKey && !groqKey) {
-    throw new Error('Neither GEMINI_API_KEY nor GROQ_API_KEY is configured in environment');
+  if (!groqKey && !apiKey) {
+    throw new Error('Neither GROQ_API_KEY nor GEMINI_API_KEY is configured in environment');
   }
 
-  const model = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+  // 1. PRIMARY: Groq (Rock-solid, 0.3s latency, 100% active on all accounts)
+  if (groqKey) {
+    const groqModels = [
+      'llama-3.1-8b-instant',
+      'llama-3.3-70b-versatile',
+      'llama3-8b-8192',
+      'mixtral-8x7b-32768'
+    ];
 
-  // 1. Try Google Gemini Interactions API (Recommended for Gemini 3.8 Flash)
+    const messages = [{ role: 'system', content: systemPrompt }];
+    for (const item of history) {
+      messages.push({
+        role: item.role === 'model' ? 'assistant' : 'user',
+        content: item.text
+      });
+    }
+    messages.push({ role: 'user', content: userMessage });
+
+    for (const model of groqModels) {
+      try {
+        console.log(`[AI Engine] Trying Groq model: ${model}...`);
+        const response = await axios.post('https://api.groq.com/openai/v1/chat/completions', {
+          model: model,
+          messages: messages,
+          temperature: 0.6,
+          max_tokens: 1000
+        }, {
+          headers: {
+            'Authorization': `Bearer ${groqKey}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 10000
+        });
+
+        const rawReply = response.data?.choices?.[0]?.message?.content || '';
+        if (rawReply) {
+          console.log(`[AI Engine] Groq Success with model: ${model}!`);
+          return parseReply(rawReply, null);
+        }
+      } catch (err) {
+        console.warn(`[AI Engine] Groq ${model} failed:`, err.response?.data?.error?.message || err.message);
+      }
+    }
+  }
+
+  // 2. SECONDARY: Google Gemini Interactions API (if Groq fails)
   if (apiKey) {
     try {
-      console.log(`[AI Engine] Calling Google Interactions API with model: ${model}...`);
+      console.log('[AI Engine] Trying Google Gemini Interactions API...');
+      const model = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
       const interactionsUrl = 'https://generativelanguage.googleapis.com/v1beta/interactions';
       
       const payload = {
@@ -41,7 +86,7 @@ async function generateGeminiReply(history = [], userMessage = '', previousInter
           'Content-Type': 'application/json',
           'x-goog-api-key': apiKey
         },
-        timeout: 15000
+        timeout: 10000
       });
 
       const data = response.data;
@@ -58,75 +103,15 @@ async function generateGeminiReply(history = [], userMessage = '', previousInter
       }
 
       if (rawReply) {
+        console.log('[AI Engine] Gemini Interactions Success!');
         return parseReply(rawReply, data.id);
       }
     } catch (err) {
-      console.warn('[AI Engine] Interactions API failed:', err.response?.data?.error?.message || err.message);
-    }
-
-    // 2. Fallback: Classic generateContent API with gemini-2.0-flash / gemini-2.5-flash-lite
-    try {
-      console.log('[AI Engine] Falling back to generateContent API...');
-      const fallbackModel = 'gemini-2.5-flash-lite';
-      const classicUrl = `https://generativelanguage.googleapis.com/v1beta/models/${fallbackModel}:generateContent?key=${apiKey}`;
-
-      const contents = history.map(item => ({
-        role: item.role === 'model' ? 'model' : 'user',
-        parts: [{ text: item.text }]
-      }));
-      contents.push({ role: 'user', parts: [{ text: userMessage }] });
-
-      const response = await axios.post(classicUrl, {
-        system_instruction: { parts: [{ text: systemPrompt }] },
-        contents: contents,
-        generationConfig: { temperature: 0.6, maxOutputTokens: 1000 }
-      }, {
-        headers: { 'Content-Type': 'application/json' },
-        timeout: 15000
-      });
-
-      const rawReply = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-      if (rawReply) {
-        return parseReply(rawReply, null);
-      }
-    } catch (err) {
-      console.warn('[AI Engine] generateContent fallback failed:', err.response?.data?.error?.message || err.message);
+      console.warn('[AI Engine] Gemini Interactions API failed:', err.response?.data?.error?.message || err.message);
     }
   }
 
-  // 3. Fallback: Groq Cloud (Llama 3.3 70B - 100% Free, 0.5s Latency) if GROQ_API_KEY is provided
-  if (groqKey) {
-    try {
-      console.log('[AI Engine] Falling back to Groq Llama 3.3 70B...');
-      const messages = [{ role: 'system', content: systemPrompt }];
-      for (const item of history) {
-        messages.push({ role: item.role === 'model' ? 'assistant' : 'user', content: item.text });
-      }
-      messages.push({ role: 'user', content: userMessage });
-
-      const response = await axios.post('https://api.groq.com/openai/v1/chat/completions', {
-        model: 'llama-3.3-70b-versatile',
-        messages: messages,
-        temperature: 0.6,
-        max_tokens: 1000
-      }, {
-        headers: {
-          'Authorization': `Bearer ${groqKey}`,
-          'Content-Type': 'application/json'
-        },
-        timeout: 10000
-      });
-
-      const rawReply = response.data?.choices?.[0]?.message?.content || '';
-      if (rawReply) {
-        return parseReply(rawReply, null);
-      }
-    } catch (err) {
-      console.error('[AI Engine] Groq fallback failed:', err.response?.data || err.message);
-    }
-  }
-
-  throw new Error('All AI providers (Interactions API, generateContent, Groq) failed to generate a response.');
+  throw new Error('All configured AI providers (Groq models & Gemini) failed to generate a response.');
 }
 
 function parseReply(rawReply, interactionId = null) {
