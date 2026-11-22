@@ -27,7 +27,7 @@ function isWithinActiveHours(date = new Date()) {
  */
 function calculateFollowupDelayMs() {
   const now = new Date();
-  const defaultDelayMs = 2.5 * 60 * 60 * 1000; // 2.5 hours
+  const defaultDelayMs = 45 * 60 * 1000; // 45 minutes
   const targetDate = new Date(now.getTime() + defaultDelayMs);
 
   if (isWithinActiveHours(targetDate)) {

@@ -80,4 +80,7 @@ At the end of your response, append strictly this block:
   "is_qualified": false
 }
 </lead_data>
+- Set "is_qualified": true and "lead_temperature": "hot" as soon as the user agrees to a paid plan or gives a preferred call time.
+- Set "lead_stage": "appointment_booked" when a call time is selected.
+- In "summary", write a quick 1-line summary for the telecaller.
 `;

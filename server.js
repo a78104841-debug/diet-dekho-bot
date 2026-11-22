@@ -187,12 +187,40 @@ app.post('/webhook', async (req, res) => {
           session.leadData[key] = val;
         }
       }
+    }
 
-      // Push to NeoDove if newly qualified
-      if (session.leadData.is_qualified && !session.leadData.alreadyPushedToCrm) {
-        console.log(`🎉 [LEAD QUALIFIED] Pushing to CRM for ${senderPhone}...`);
-        await pushLeadToNeoDove(session.leadData, senderPhone);
-        session.leadData.alreadyPushedToCrm = true;
+    // 1. Fresh Lead Registration: Register on NeoDove on very first inbound contact
+    if (!session.leadData.alreadyCreatedInCrm) {
+      console.log(`📥 [NEODOVE FRESH LEAD] Creating initial lead for ${senderPhone}...`);
+      const freshLeadPayload = {
+        ...session.leadData,
+        lead_stage: 'fresh_lead',
+        lead_temperature: 'cold',
+        is_qualified: false,
+        summary: `Fresh inquiry. First message: "${incomingText.substring(0, 100)}"`
+      };
+      const created = await pushLeadToNeoDove(freshLeadPayload, senderPhone, false);
+      if (created) {
+        session.leadData.alreadyCreatedInCrm = true;
+      }
+    }
+
+    // 2. Lead Qualification / Call Booking Update: Update lead in NeoDove when details/call booked
+    const isQualifiedNow = session.leadData.is_qualified ||
+                           Boolean(session.leadData.preferred_call_time) ||
+                           (session.leadData.name && session.leadData.goal && session.leadData.is_paid_comfortable);
+
+    if (isQualifiedNow) {
+      if (!session.leadData.alreadyQualifiedInCrm) {
+        console.log(`🎉 [LEAD QUALIFIED] Updating lead to Qualified/Call Booked in NeoDove CRM for ${senderPhone}...`);
+        session.leadData.lead_stage = session.leadData.preferred_call_time ? 'appointment_booked' : 'qualified';
+        session.leadData.lead_temperature = 'hot';
+        session.leadData.is_qualified = true;
+        const updated = await pushLeadToNeoDove(session.leadData, senderPhone, true);
+        if (updated) session.leadData.alreadyQualifiedInCrm = true;
+      } else if (leadData && (leadData.preferred_call_time || leadData.name || leadData.current_weight || leadData.city)) {
+        console.log(`🔄 [LEAD UPDATE] Pushing updated details to NeoDove CRM for ${senderPhone}...`);
+        await pushLeadToNeoDove(session.leadData, senderPhone, true);
       }
     }
 
