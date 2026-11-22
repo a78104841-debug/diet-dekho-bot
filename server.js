@@ -1,5 +1,7 @@
 require('dotenv').config();
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
 const { generateGeminiReply } = require('./gemini');
 const { sendWhatsAppMessage } = require('./whatsapp');
 const { pushLeadToNeoDove } = require('./neodove');
@@ -7,6 +9,45 @@ const { scheduleFollowup, cancelFollowup } = require('./followup');
 
 const app = express();
 app.use(express.json());
+
+// File-backed session persistence so user details are NEVER lost on restart
+const DATA_DIR = path.join(__dirname, 'data');
+const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
+
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+
+// In-memory cache synced with disk
+const sessions = new Map();
+
+function loadSessionsFromDisk() {
+  try {
+    if (fs.existsSync(SESSIONS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(SESSIONS_FILE, 'utf8'));
+      for (const [phone, session] of Object.entries(data)) {
+        sessions.set(phone, session);
+      }
+      console.log(`[Persistence] Loaded ${sessions.size} sessions from disk.`);
+    }
+  } catch (err) {
+    console.error('[Persistence] Error loading sessions:', err.message);
+  }
+}
+
+function saveSessionsToDisk() {
+  try {
+    const obj = {};
+    for (const [phone, session] of sessions.entries()) {
+      obj[phone] = session;
+    }
+    fs.writeFileSync(SESSIONS_FILE, JSON.stringify(obj, null, 2), 'utf8');
+  } catch (err) {
+    console.error('[Persistence] Error saving sessions:', err.message);
+  }
+}
+
+loadSessionsFromDisk();
 
 // In-memory debug logs
 const debugLogs = [];
@@ -25,39 +66,33 @@ app.get('/debug', (req, res) => {
   });
 });
 
-
-// In-memory session store: { [phone]: { history: [], leadData: {}, lastUpdated: Date } }
-const sessions = new Map();
-
-// Deduplication cache for message IDs: Set of messageIds processed in the last 10 minutes
+// Deduplication cache for message IDs
 const processedMessageIds = new Set();
 
-/**
- * Helper to get or create a session for a phone number
- */
 function getSession(phone) {
   if (!sessions.has(phone)) {
     sessions.set(phone, {
       history: [],
-      leadData: null,
+      leadData: {},
+      interactionId: null,
       lastUpdated: new Date()
     });
+    saveSessionsToDisk();
   }
   return sessions.get(phone);
 }
 
-// 1. Health check endpoint (Used by Render to verify service is alive)
+// 1. Health check endpoint
 app.get('/', (req, res) => {
   res.status(200).json({
     status: 'online',
-    service: 'Diet Dekho WhatsApp AI Lead Bot',
+    service: 'Diet Dekho WhatsApp AI Lead Bot (v3)',
     timestamp: new Date().toISOString()
   });
 });
 
 // 2. Webhook verification endpoint (GET)
 app.get('/webhook', (req, res) => {
-  // Support standard Meta verification handshake if Finbite requires it
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
@@ -75,7 +110,6 @@ app.get('/webhook', (req, res) => {
 
 // 3. Webhook listener endpoint (POST)
 app.post('/webhook', async (req, res) => {
-  // Immediately return 200 OK so the WhatsApp provider doesn't timeout
   res.status(200).json({ status: 'received' });
 
   try {
@@ -86,82 +120,85 @@ app.post('/webhook', async (req, res) => {
     let incomingText = null;
     let messageId = null;
 
-    // Format 1: Finbite standard event format
-    // { event: "message-received", data: { senderPhoneNumber, content: { text }, messageId } }
     if (body.data) {
       senderPhone = body.data.senderPhoneNumber;
       messageId = body.data.messageId;
       incomingText = body.data.content?.text || body.data.text || '';
-    } 
-    // Format 2: Meta Cloud API standard format
-    else if (body.entry?.[0]?.changes?.[0]?.value?.messages?.[0]) {
+    } else if (body.entry?.[0]?.changes?.[0]?.value?.messages?.[0]) {
       const msg = body.entry[0].changes[0].value.messages[0];
       senderPhone = msg.from;
       messageId = msg.id;
       incomingText = msg.text?.body || '';
-    }
-    // Format 3: Direct simple payload
-    else if (body.sender || body.from || body.phone) {
+    } else if (body.sender || body.from || body.phone) {
       senderPhone = body.sender || body.from || body.phone;
       incomingText = body.text || body.message || '';
       messageId = body.messageId || `${senderPhone}_${Date.now()}`;
     }
 
-    // Ignore if no phone or message
     if (!senderPhone || !incomingText || incomingText.trim() === '') {
-      console.log('[Webhook] Ignored: Non-text message or missing sender phone.');
       return;
     }
 
-    // Deduplication check
     if (messageId && processedMessageIds.has(messageId)) {
       console.log(`[Webhook] Duplicate messageId ${messageId} ignored.`);
       return;
     }
     if (messageId) {
       processedMessageIds.add(messageId);
-      // Clean up after 10 minutes
       setTimeout(() => processedMessageIds.delete(messageId), 10 * 60 * 1000);
     }
 
     addDebugLog(`Message Received from ${senderPhone}: "${incomingText}"`);
-
-    // Reset any pending follow-up since the user has replied!
     cancelFollowup(senderPhone);
 
     const session = getSession(senderPhone);
 
-    // Call Gemini with user message and history
-    const { replyText, leadData, interactionId } = await generateGeminiReply(session.history, incomingText, session.interactionId);
+    // Call AI Engine with history, user message, and known lead memory
+    const { replyText, leadData, interactionId } = await generateGeminiReply(
+      session.history,
+      incomingText,
+      session.leadData,
+      session.interactionId
+    );
+
     if (interactionId) session.interactionId = interactionId;
 
     // Update conversation history
     session.history.push({ role: 'user', text: incomingText });
     session.history.push({ role: 'model', text: replyText });
+
+    // Keep history manageable (last 20 messages)
+    if (session.history.length > 20) {
+      session.history = session.history.slice(-20);
+    }
+
     session.lastUpdated = new Date();
 
-    // Send AI reply back to user via Finbite WhatsApp API
+    // Send AI reply back to WhatsApp user
     if (replyText) {
       await sendWhatsAppMessage(senderPhone, replyText);
     }
 
-    // Process Lead Qualification
+    // Merge and persist lead data
     if (leadData) {
       console.log(`[Lead Data Extracted for ${senderPhone}]:`, JSON.stringify(leadData));
       session.leadData = { ...session.leadData, ...leadData };
 
-      // If lead is newly qualified, push to NeoDove
+      // Push to NeoDove if newly qualified
       if (leadData.is_qualified) {
         console.log(`🎉 [LEAD QUALIFIED] Pushing to CRM for ${senderPhone}...`);
         await pushLeadToNeoDove(session.leadData, senderPhone);
       }
     }
 
-    // Schedule next smart follow-up if lead is not yet qualified
+    // Save session to disk immediately
+    saveSessionsToDisk();
+
+    // Schedule smart follow-up if not yet qualified
     scheduleFollowup(senderPhone, session.history, session.leadData);
 
   } catch (error) {
-    addDebugLog('Webhook Processing Error', error.message || error);
+    addDebugLog('Webhook Processing Error', error.message || String(error));
   }
 });
 

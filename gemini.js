@@ -3,15 +3,15 @@ const systemPrompt = require('./system_prompt');
 
 /**
  * Call AI Engine for Diet Dekho WhatsApp Bot.
- * Uses Groq's high-speed active models (openai/gpt-oss-20b, openai/gpt-oss-120b, qwen/qwen3.8-27b).
+ * Prioritizes Groq (openai/gpt-oss-20b) with known lead context injection.
  * 
  * @param {Array<{role: string, text: string}>} history 
  * @param {string} userMessage 
+ * @param {object|null} existingLeadData
  * @param {string|null} previousInteractionId
  * @returns {Promise<{replyText: string, leadData: object|null, interactionId: string|null}>}
  */
-async function generateGeminiReply(history = [], userMessage = '', previousInteractionId = null) {
-  // Read keys strictly from environment variables (No hardcoded secrets)
+async function generateGeminiReply(history = [], userMessage = '', existingLeadData = null, previousInteractionId = null) {
   const groqKey = process.env.GROQ_API_KEY;
   const apiKey = process.env.GEMINI_API_KEY;
 
@@ -21,7 +21,20 @@ async function generateGeminiReply(history = [], userMessage = '', previousInter
     'qwen/qwen3.8-27b'
   ];
 
-  const messages = [{ role: 'system', content: systemPrompt }];
+  // Build system message with strict persistence memory reminder
+  let dynamicSystemPrompt = systemPrompt;
+  if (existingLeadData && Object.keys(existingLeadData).length > 0) {
+    const knownFields = Object.entries(existingLeadData)
+      .filter(([_, v]) => v !== null && v !== '' && (!Array.isArray(v) || v.length > 0))
+      .map(([k, v]) => `${k}: ${JSON.stringify(v)}`)
+      .join(', ');
+
+    if (knownFields) {
+      dynamicSystemPrompt += `\n\n## 11. CURRENT LEAD MEMORY (ALREADY COLLECTED - NEVER ASK AGAIN)\nThe user has already shared these details in this chat: [ ${knownFields} ].\n- DO NOT ask for any of these details again.\n- If preferred_call_time is already scheduled, DO NOT repeat the call confirmation line at the end of your answer. Just answer the user's specific question directly.`;
+    }
+  }
+
+  const messages = [{ role: 'system', content: dynamicSystemPrompt }];
   for (const item of history) {
     messages.push({
       role: item.role === 'model' ? 'assistant' : 'user',
@@ -30,7 +43,7 @@ async function generateGeminiReply(history = [], userMessage = '', previousInter
   }
   messages.push({ role: 'user', content: userMessage });
 
-  // 1. PRIMARY: Groq (Superfast 0.4s response, fully active)
+  // 1. PRIMARY: Groq (0.4s instant execution)
   if (groqKey) {
     for (const model of groqModels) {
       try {
@@ -38,7 +51,7 @@ async function generateGeminiReply(history = [], userMessage = '', previousInter
         const response = await axios.post('https://api.groq.com/openai/v1/chat/completions', {
           model: model,
           messages: messages,
-          temperature: 0.6,
+          temperature: 0.5,
           max_tokens: 1000
         }, {
           headers: {
@@ -69,7 +82,7 @@ async function generateGeminiReply(history = [], userMessage = '', previousInter
       
       const payload = {
         model: model,
-        system_instruction: systemPrompt,
+        system_instruction: dynamicSystemPrompt,
         input: userMessage
       };
 
