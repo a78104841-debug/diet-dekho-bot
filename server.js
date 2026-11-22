@@ -2,10 +2,11 @@ require('dotenv').config();
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const axios = require('axios');
 const { generateGeminiReply } = require('./gemini');
 const { sendWhatsAppMessage } = require('./whatsapp');
 const { pushLeadToNeoDove } = require('./neodove');
-const { scheduleFollowup, cancelFollowup } = require('./followup');
+const { scheduleFollowup, cancelFollowup, checkAndExecuteDueFollowups } = require('./followup');
 
 const app = express();
 app.use(express.json());
@@ -29,6 +30,10 @@ function loadSessionsFromDisk() {
         sessions.set(phone, session);
       }
       console.log(`[Persistence] Loaded ${sessions.size} sessions from disk.`);
+      // Check if any follow-up became due while restarting
+      setTimeout(() => {
+        checkAndExecuteDueFollowups(sessions, saveSessionsToDisk).catch(e => {});
+      }, 5000);
     }
   } catch (err) {
     console.error('[Persistence] Error loading sessions:', err.message);
@@ -82,13 +87,36 @@ function getSession(phone) {
   return sessions.get(phone);
 }
 
-// 1. Health check endpoint
+// 1. Health check & Ping endpoints
 app.get('/', (req, res) => {
   res.status(200).json({
     status: 'online',
     service: 'Diet Dekho WhatsApp AI Lead Bot (v3)',
     timestamp: new Date().toISOString()
   });
+});
+
+app.get('/ping', (req, res) => {
+  res.status(200).send('pong');
+});
+
+// Follow-up Cron & Health Endpoint (hit by external pingers to keep alive & trigger follow-ups)
+app.get('/cron/followup', async (req, res) => {
+  try {
+    await checkAndExecuteDueFollowups(sessions, saveSessionsToDisk);
+    let pendingCount = 0;
+    for (const s of sessions.values()) {
+      if (s.followupPending) pendingCount++;
+    }
+    res.json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      activeSessions: sessions.size,
+      pendingFollowups: pendingCount
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // 2. Webhook verification endpoint (GET)
@@ -149,9 +177,8 @@ app.post('/webhook', async (req, res) => {
     }
 
     addDebugLog(`Message Received from ${senderPhone}: "${incomingText}"`);
-    cancelFollowup(senderPhone);
-
     const session = getSession(senderPhone);
+    cancelFollowup(senderPhone, session, saveSessionsToDisk);
 
     // Call AI Engine with history, user message, and known lead memory
     const { replyText, leadData, interactionId } = await generateGeminiReply(
@@ -227,13 +254,26 @@ app.post('/webhook', async (req, res) => {
     // Save session to disk immediately
     saveSessionsToDisk();
 
-    // Schedule smart follow-up if not yet qualified
-    scheduleFollowup(senderPhone, session.history, session.leadData);
+    // Schedule smart 45-min follow-up (persisted to disk)
+    scheduleFollowup(senderPhone, session, saveSessionsToDisk);
 
   } catch (error) {
     addDebugLog('Webhook Processing Error', error.message || String(error));
   }
 });
+
+// Periodic background follow-up worker (runs every 60 seconds)
+setInterval(() => {
+  checkAndExecuteDueFollowups(sessions, saveSessionsToDisk).catch(err => {
+    console.error('[Follow-up Loop Error]:', err.message);
+  });
+}, 60 * 1000);
+
+// Keep-alive self ping every 8 minutes
+setInterval(() => {
+  const url = process.env.RENDER_EXTERNAL_URL || 'https://diet-dekho-bot.onrender.com';
+  axios.get(`${url}/ping`).catch(() => {});
+}, 8 * 60 * 1000);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
