@@ -180,6 +180,17 @@ app.post('/webhook', async (req, res) => {
     const session = getSession(senderPhone);
     cancelFollowup(senderPhone, session, saveSessionsToDisk);
 
+    // Native Opt-Out Guard: Finbite handles opt-out natively for "NO", "STOP", "UNSUBSCRIBE"
+    const normalizedInput = incomingText.trim().toLowerCase();
+    if (normalizedInput === 'no' || normalizedInput === 'stop' || normalizedInput === 'unsubscribe') {
+      console.log(`[Opt-Out] User ${senderPhone} replied "${incomingText}". Finbite handles opt-out natively. Suppressing AI reply.`);
+      session.leadData = session.leadData || {};
+      session.leadData.lead_stage = 'opted_out';
+      session.followupPending = false;
+      saveSessionsToDisk();
+      return;
+    }
+
     // Call AI Engine with history, user message, and known lead memory
     const { replyText, leadData, interactionId } = await generateGeminiReply(
       session.history,
