@@ -179,15 +179,20 @@ app.post('/webhook', async (req, res) => {
       await sendWhatsAppMessage(senderPhone, replyText);
     }
 
-    // Merge and persist lead data
-    if (leadData) {
+    // Merge and persist lead data (never overwrite existing values with null/empty)
+    if (leadData && typeof leadData === 'object') {
       console.log(`[Lead Data Extracted for ${senderPhone}]:`, JSON.stringify(leadData));
-      session.leadData = { ...session.leadData, ...leadData };
+      for (const [key, val] of Object.entries(leadData)) {
+        if (val !== null && val !== undefined && val !== '') {
+          session.leadData[key] = val;
+        }
+      }
 
       // Push to NeoDove if newly qualified
-      if (leadData.is_qualified) {
+      if (session.leadData.is_qualified && !session.leadData.alreadyPushedToCrm) {
         console.log(`🎉 [LEAD QUALIFIED] Pushing to CRM for ${senderPhone}...`);
         await pushLeadToNeoDove(session.leadData, senderPhone);
+        session.leadData.alreadyPushedToCrm = true;
       }
     }
 

@@ -90,7 +90,7 @@ function scheduleFollowup(phone, history, lastLeadData) {
     console.log(`[Follow-up Triggered] Executing smart follow-up for ${phone}...`);
 
     try {
-      const followUpInstruction = `[SYSTEM NOTE: The user stopped responding. Generate a warm, gentle, context-aware follow-up message strictly adhering to Section 8 of the system prompt. Keep it 2-3 lines max.]`;
+      const followUpInstruction = `[SYSTEM NOTE: The user stopped responding. Generate a warm, gentle, context-aware follow-up message strictly adhering to Section 7 of the system prompt. Keep it 2 lines max.]`;
       
       const { replyText, leadData } = await generateGeminiReply(history, followUpInstruction);
 

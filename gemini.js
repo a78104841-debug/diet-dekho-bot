@@ -3,7 +3,7 @@ const systemPrompt = require('./system_prompt');
 
 /**
  * Call AI Engine for Diet Dekho WhatsApp Bot.
- * Prioritizes Groq (openai/gpt-oss-20b) with known lead context injection.
+ * Strips all JSON metadata rigorously so it NEVER leaks to WhatsApp.
  * 
  * @param {Array<{role: string, text: string}>} history 
  * @param {string} userMessage 
@@ -29,7 +29,7 @@ async function generateGeminiReply(history = [], userMessage = '', existingLeadD
       .join(', ');
 
     if (knownFields) {
-      dynamicSystemPrompt += `\n\n## CURRENT LEAD MEMORY (ALREADY COLLECTED - NEVER RE-ASK)\nThe user has already shared: [ ${knownFields} ].\n- DO NOT ask for any of these details again.\n- If preferred_call_time is already scheduled, DO NOT repeat the call confirmation line at the end of your answer.`;
+      dynamicSystemPrompt += `\n\n## CURRENT KNOWN LEAD DATA (DO NOT ASK FOR THESE AGAIN)\n[ ${knownFields} ]\n- If a detail above is already known, NEVER ask for it again.\n- If user asks a question, answer their question FIRST. Never ignore their question.`;
     }
   }
 
@@ -50,7 +50,7 @@ async function generateGeminiReply(history = [], userMessage = '', existingLeadD
         const response = await axios.post('https://api.groq.com/openai/v1/chat/completions', {
           model: model,
           messages: messages,
-          temperature: 0.5,
+          temperature: 0.4,
           max_tokens: 1500
         }, {
           headers: {
@@ -122,25 +122,66 @@ async function generateGeminiReply(history = [], userMessage = '', existingLeadD
   throw new Error('All configured AI models on Groq and Gemini failed.');
 }
 
+/**
+ * Parse reply and strictly strip ANY JSON block from the text sent to WhatsApp
+ */
 function parseReply(rawReply, interactionId = null) {
   let leadData = null;
-  const jsonMatch = rawReply.match(/<lead_data>([\s\S]*?)(?:<\/lead_data>|$)/i);
+  let cleanReplyText = rawReply;
 
-  if (jsonMatch && jsonMatch[1]) {
+  // 1. Look for <lead_data> tag
+  const tagMatch = rawReply.match(/<lead_data>([\s\S]*?)(?:<\/lead_data>|$)/i);
+  if (tagMatch) {
     try {
-      // Find the first { and last }
-      const content = jsonMatch[1].trim();
+      const content = tagMatch[1].trim();
       const start = content.indexOf('{');
       const end = content.lastIndexOf('}');
       if (start !== -1 && end !== -1 && end > start) {
         leadData = JSON.parse(content.substring(start, end + 1));
       }
-    } catch (err) {
-      console.error('Failed to parse <lead_data> JSON:', err.message);
-    }
+    } catch (e) {}
+    cleanReplyText = cleanReplyText.replace(/<lead_data>[\s\S]*?(?:<\/lead_data>|$)/gi, '').trim();
   }
 
-  const cleanReplyText = rawReply.replace(/<lead_data>[\s\S]*?(?:<\/lead_data>|$)/gi, '').trim();
+  // 2. Also strip any raw JSON object { ... "is_qualified" ... } or markdown codeblock { ... }
+  const jsonPattern = /\n*```(?:json)?\s*(\{[\s\S]*?\})\s*```|\n*(\{[\s\S]*?"(?:name|goal|is_qualified|lead_stage)"[\s\S]*?\})/i;
+  const rawJsonMatch = cleanReplyText.match(jsonPattern);
+  if (rawJsonMatch) {
+    try {
+      const jsonStr = (rawJsonMatch[1] || rawJsonMatch[2]).trim();
+      if (!leadData) {
+        leadData = JSON.parse(jsonStr);
+      }
+    } catch (e) {}
+    cleanReplyText = cleanReplyText.replace(jsonPattern, '').trim();
+  }
+
+  // 3. Fallback: If text still ends with a JSON block starting with { and ending with }
+  const trailingBraceMatch = cleanReplyText.match(/\n\s*(\{[\s\S]*\})\s*$/);
+  if (trailingBraceMatch) {
+    try {
+      if (!leadData) {
+        leadData = JSON.parse(trailingBraceMatch[1].trim());
+      }
+      cleanReplyText = cleanReplyText.substring(0, trailingBraceMatch.index).trim();
+    } catch (e) {}
+  }
+
+  // 4. Ultimate safety guard: Never let raw JSON keys reach WhatsApp under any circumstances
+  const emergencyJsonRegex = /\n*\{[\s\r\n]*"(?:name|goal|medical_conditions|current_weight|is_qualified|lead_stage|lead_temperature)"[\s\S]*$/i;
+  if (emergencyJsonRegex.test(cleanReplyText)) {
+    const match = cleanReplyText.match(emergencyJsonRegex);
+    if (!leadData && match) {
+      try {
+        const start = match[0].indexOf('{');
+        const end = match[0].lastIndexOf('}');
+        if (start !== -1 && end !== -1 && end > start) {
+          leadData = JSON.parse(match[0].substring(start, end + 1));
+        }
+      } catch (e) {}
+    }
+    cleanReplyText = cleanReplyText.replace(emergencyJsonRegex, '').trim();
+  }
 
   return {
     replyText: cleanReplyText,
