@@ -21,7 +21,6 @@ async function generateGeminiReply(history = [], userMessage = '', existingLeadD
     'qwen/qwen3.8-27b'
   ];
 
-  // Build system message with strict persistence memory reminder
   let dynamicSystemPrompt = systemPrompt;
   if (existingLeadData && Object.keys(existingLeadData).length > 0) {
     const knownFields = Object.entries(existingLeadData)
@@ -30,7 +29,7 @@ async function generateGeminiReply(history = [], userMessage = '', existingLeadD
       .join(', ');
 
     if (knownFields) {
-      dynamicSystemPrompt += `\n\n## 11. CURRENT LEAD MEMORY (ALREADY COLLECTED - NEVER ASK AGAIN)\nThe user has already shared these details in this chat: [ ${knownFields} ].\n- DO NOT ask for any of these details again.\n- If preferred_call_time is already scheduled, DO NOT repeat the call confirmation line at the end of your answer. Just answer the user's specific question directly.`;
+      dynamicSystemPrompt += `\n\n## CURRENT LEAD MEMORY (ALREADY COLLECTED - NEVER RE-ASK)\nThe user has already shared: [ ${knownFields} ].\n- DO NOT ask for any of these details again.\n- If preferred_call_time is already scheduled, DO NOT repeat the call confirmation line at the end of your answer.`;
     }
   }
 
@@ -52,7 +51,7 @@ async function generateGeminiReply(history = [], userMessage = '', existingLeadD
           model: model,
           messages: messages,
           temperature: 0.5,
-          max_tokens: 1000
+          max_tokens: 1500
         }, {
           headers: {
             'Authorization': `Bearer ${groqKey.trim()}`,
@@ -125,17 +124,23 @@ async function generateGeminiReply(history = [], userMessage = '', existingLeadD
 
 function parseReply(rawReply, interactionId = null) {
   let leadData = null;
-  const jsonMatch = rawReply.match(/<lead_data>([\s\S]*?)<\/lead_data>/i);
+  const jsonMatch = rawReply.match(/<lead_data>([\s\S]*?)(?:<\/lead_data>|$)/i);
 
   if (jsonMatch && jsonMatch[1]) {
     try {
-      leadData = JSON.parse(jsonMatch[1].trim());
+      // Find the first { and last }
+      const content = jsonMatch[1].trim();
+      const start = content.indexOf('{');
+      const end = content.lastIndexOf('}');
+      if (start !== -1 && end !== -1 && end > start) {
+        leadData = JSON.parse(content.substring(start, end + 1));
+      }
     } catch (err) {
       console.error('Failed to parse <lead_data> JSON:', err.message);
     }
   }
 
-  const cleanReplyText = rawReply.replace(/<lead_data>[\s\S]*?<\/lead_data>/gi, '').trim();
+  const cleanReplyText = rawReply.replace(/<lead_data>[\s\S]*?(?:<\/lead_data>|$)/gi, '').trim();
 
   return {
     replyText: cleanReplyText,

@@ -14,7 +14,7 @@ async function pushLeadToNeoDove(leadData, phone) {
     return false;
   }
 
-  // Format payload according to NeoDove Custom Inbound Webhook standards
+  // Format payload according to NeoDove Custom Inbound Webhook standards (v6)
   const payload = {
     name: leadData.name || 'WhatsApp Lead',
     mobile: String(phone).replace(/[^0-9]/g, ''),
@@ -26,6 +26,11 @@ async function pushLeadToNeoDove(leadData, phone) {
     current_weight: leadData.current_weight || '',
     target_weight: leadData.target_weight || '',
     bmi: leadData.bmi || '',
+    diet_preference: leadData.diet_preference || '',
+    start_timeline: leadData.start_timeline || '',
+    is_paid_comfortable: leadData.is_paid_comfortable !== undefined ? leadData.is_paid_comfortable : true,
+    lead_temperature: leadData.lead_temperature || 'hot',
+    summary: leadData.summary || '',
     preferred_call_time: leadData.preferred_call_time || '',
     red_flags: Array.isArray(leadData.red_flags) ? leadData.red_flags.join(', ') : '',
     lead_stage: leadData.lead_stage || 'qualified',
