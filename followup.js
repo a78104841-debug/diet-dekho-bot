@@ -70,9 +70,9 @@ function scheduleFollowup(phone, session, saveSessionsToDisk) {
     return;
   }
 
-  // Skip if customer explicitly opted out
-  if (session.leadData?.lead_stage === 'opted_out') {
-    console.log(`[Follow-up] Skipping: User opted out for ${phone}`);
+  // Skip if customer explicitly opted out or is not interested
+  if (session.leadData?.lead_stage === 'opted_out' || session.leadData?.lead_stage === 'not_interested' || session.leadData?.is_paid_comfortable === false) {
+    console.log(`[Follow-up] Skipping: User opted out or not interested for ${phone}`);
     session.followupPending = false;
     return;
   }
@@ -108,7 +108,7 @@ async function checkAndExecuteDueFollowups(sessions, saveSessionsToDisk) {
       continue;
     }
 
-    if (session.leadData?.lead_stage === 'opted_out' || (session.followupCount || 0) >= 2) {
+    if (session.leadData?.lead_stage === 'opted_out' || session.leadData?.lead_stage === 'not_interested' || session.leadData?.is_paid_comfortable === false || (session.followupCount || 0) >= 2) {
       session.followupPending = false;
       continue;
     }
