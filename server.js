@@ -151,16 +151,40 @@ app.post('/webhook', async (req, res) => {
     if (body.data) {
       senderPhone = body.data.senderPhoneNumber;
       messageId = body.data.messageId;
-      incomingText = body.data.content?.text || body.data.text || '';
+      // Extract from all possible WhatsApp / Finbite message types (text, button, interactive buttonReply, listReply)
+      incomingText = body.data.content?.text ||
+                     body.data.content?.button?.text ||
+                     body.data.content?.button?.payload ||
+                     body.data.content?.buttonReply?.title ||
+                     body.data.content?.buttonReply?.id ||
+                     body.data.content?.interactive?.button_reply?.title ||
+                     body.data.content?.interactive?.button_reply?.id ||
+                     body.data.content?.interactive?.list_reply?.title ||
+                     body.data.text ||
+                     body.data.button?.text ||
+                     body.data.button?.payload ||
+                     '';
     } else if (body.entry?.[0]?.changes?.[0]?.value?.messages?.[0]) {
       const msg = body.entry[0].changes[0].value.messages[0];
       senderPhone = msg.from;
       messageId = msg.id;
-      incomingText = msg.text?.body || '';
+      incomingText = msg.text?.body ||
+                     msg.button?.text ||
+                     msg.button?.payload ||
+                     msg.interactive?.button_reply?.title ||
+                     msg.interactive?.button_reply?.id ||
+                     msg.interactive?.list_reply?.title ||
+                     '';
     } else if (body.sender || body.from || body.phone) {
       senderPhone = body.sender || body.from || body.phone;
-      incomingText = body.text || body.message || '';
       messageId = body.messageId || `${senderPhone}_${Date.now()}`;
+      incomingText = body.text ||
+                     body.message ||
+                     body.content?.text ||
+                     body.content?.button?.text ||
+                     body.content?.buttonReply?.title ||
+                     body.button?.text ||
+                     '';
     }
 
     if (!senderPhone || !incomingText || incomingText.trim() === '') {
@@ -188,6 +212,38 @@ app.post('/webhook', async (req, res) => {
       session.leadData.lead_stage = 'opted_out';
       session.followupPending = false;
       saveSessionsToDisk();
+      return;
+    }
+
+    // Fast-Path: When user clicks/types "YES" to the broadcast, reply instantly without AI latency or TPM limits
+    if (normalizedInput === 'yes') {
+      console.log(`⚡ [Fast-Path YES] Instant broadcast response for ${senderPhone}...`);
+      session.leadData = session.leadData || {};
+      session.leadData.goal = 'Weight Loss';
+      session.leadData.is_qualified = false;
+
+      const fastReply = "Awesome! We'd love to help you with your weight-loss journey 🌱 What time between 10:00 AM and 6:30 PM works best for a quick 10-minute call with our certified health expert?";
+
+      session.history.push({ role: 'user', text: incomingText });
+      session.history.push({ role: 'model', text: fastReply });
+      session.lastUpdated = new Date();
+
+      await sendWhatsAppMessage(senderPhone, fastReply);
+
+      // Register Fresh Lead in NeoDove immediately
+      if (!session.leadData.alreadyCreatedInCrm) {
+        await pushLeadToNeoDove({
+          ...session.leadData,
+          lead_stage: 'fresh_lead',
+          lead_temperature: 'warm',
+          is_qualified: false,
+          summary: 'Tapped YES on 15kg broadcast campaign - awaiting call time.'
+        }, senderPhone, false);
+        session.leadData.alreadyCreatedInCrm = true;
+      }
+
+      saveSessionsToDisk();
+      scheduleFollowup(senderPhone, session, saveSessionsToDisk);
       return;
     }
 

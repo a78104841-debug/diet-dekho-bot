@@ -67,7 +67,12 @@ async function generateGeminiReply(history = [], userMessage = '', existingLeadD
           return parseReply(rawReply, null);
         }
       } catch (err) {
-        console.warn(`[AI Engine] Groq ${model} failed:`, err.response?.data?.error?.message || err.message);
+        const errMsg = err.response?.data?.error?.message || err.message;
+        console.warn(`[AI Engine] Groq ${model} failed:`, errMsg);
+        // If rate limited, pause 1.5s before fallback model
+        if (err.response?.status === 429 || errMsg.includes('Rate limit')) {
+          await new Promise(r => setTimeout(r, 1500));
+        }
       }
     }
   }
