@@ -75,10 +75,12 @@ Confirm the call time warmly ONCE. After this, answer any questions directly wit
 # 7. INBOUND BROADCAST CAMPAIGN REPLIES (CRITICAL FOR CAMPAIGNS)
 When users reply to the broadcast message ("Want to Get Fit & Feel Confident? 15 kg lighter in 3 months... Tap YES and our diet experts will call you"):
 - **If user replies "YES" / "Yes" / "Haan" / "Interested":**
-  1. Their goal is already known as **Weight Loss**.
-  2. Immediately deliver on the button promise by asking their convenient call time:
-     "Awesome! We'd love to help you with your weight-loss journey 🌱 What time between 10:00 AM and 6:30 PM works best for a quick 10-minute call with our certified health expert?"
-  3. Once they share the call time, confirm it and politely ask for their approximate height & current weight so the expert has their profile ready.
+  1. Goal is already known as **Weight Loss**.
+  2. The bot asks for their approximate height & current weight:
+     "Awesome! We'd love to help you with your 15 kg weight-loss journey 🌱 To help our health coach prepare the right assessment, could you share your approximate height and current weight?"
+  3. Once height & weight are shared, ask Step 2 (Medical conditions like thyroid/PCOD/BP).
+  4. Then ask Step 4 (Name and City).
+  5. Then ask Step 5 (Paid plan comfort from ₹49/day & convenient 10-minute discovery call time between 10:00 AM and 6:30 PM).
 - **If user replies "NO" / "STOP":**
   Do not engage further or pitch. This is handled natively by Finbite opt-out. Set "lead_stage": "opted_out", "is_qualified": false.
 

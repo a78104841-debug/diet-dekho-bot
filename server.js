@@ -215,14 +215,14 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // Fast-Path: When user clicks/types "YES" to the broadcast, reply instantly without AI latency or TPM limits
+    // Fast-Path: When user clicks/types "YES" to the broadcast, reply instantly asking for Height & Weight
     if (normalizedInput === 'yes') {
-      console.log(`⚡ [Fast-Path YES] Instant broadcast response for ${senderPhone}...`);
+      console.log(`⚡ [Fast-Path YES] Instant broadcast response asking for Height & Weight for ${senderPhone}...`);
       session.leadData = session.leadData || {};
       session.leadData.goal = 'Weight Loss';
       session.leadData.is_qualified = false;
 
-      const fastReply = "Awesome! We'd love to help you with your weight-loss journey 🌱 What time between 10:00 AM and 6:30 PM works best for a quick 10-minute call with our certified health expert?";
+      const fastReply = "Awesome! We'd love to help you with your 15 kg weight-loss journey 🌱 To help our health coach prepare the right assessment, could you share your approximate height and current weight?";
 
       session.history.push({ role: 'user', text: incomingText });
       session.history.push({ role: 'model', text: fastReply });
@@ -237,7 +237,7 @@ app.post('/webhook', async (req, res) => {
           lead_stage: 'fresh_lead',
           lead_temperature: 'warm',
           is_qualified: false,
-          summary: 'Tapped YES on 15kg broadcast campaign - awaiting call time.'
+          summary: 'Tapped YES on 15kg broadcast campaign - awaiting height/weight.'
         }, senderPhone, false);
         session.leadData.alreadyCreatedInCrm = true;
       }
