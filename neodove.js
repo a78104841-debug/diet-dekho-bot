@@ -25,12 +25,21 @@ async function pushLeadToNeoDove(leadData = {}, phone, isUpdate = false) {
 
   const isFresh = !isUpdate && !leadData.is_qualified && !leadData.preferred_call_time;
 
+  // Name Resolution Order:
+  // 1. Confirmed name given by user in chat (leadData.name)
+  // 2. Finbite senderName (leadData.finbiteName)
+  // 3. Fallback: "Lead <last 4 digits>" (never generic "WhatsApp Fresh Lead")
+  let displayName = leadData.name;
+  if (!displayName || displayName === 'WhatsApp Fresh Lead' || displayName === 'WhatsApp Lead') {
+    displayName = leadData.finbiteName || `Lead ${String(mobileNum).slice(-4)}`;
+  }
+
   const payload = {
-    name: leadData.name || (isFresh ? 'WhatsApp Fresh Lead' : 'WhatsApp Lead'),
+    name: displayName,
     mobile: mobileNum,
     city: leadData.city || '',
     source: 'WhatsApp AI (Diet Dekho)',
-    goal: leadData.goal || '',
+    goal: leadData.goal || 'Weight Loss',
     medical_conditions: leadData.medical_conditions || 'None',
     height: leadData.height ? String(leadData.height) : '',
     current_weight: leadData.current_weight ? String(leadData.current_weight) : '',
@@ -38,14 +47,14 @@ async function pushLeadToNeoDove(leadData = {}, phone, isUpdate = false) {
     bmi: leadData.bmi ? String(leadData.bmi) : '',
     preferred_call_time: leadData.preferred_call_time || '',
     is_paid_comfortable: leadData.is_paid_comfortable !== undefined ? leadData.is_paid_comfortable : null,
-    lead_temperature: isFresh ? 'cold' : (leadData.lead_temperature || 'hot'),
-    summary: leadData.summary || (isFresh ? 'Fresh WhatsApp inquiry - qualification in progress' : `Goal: ${leadData.goal || 'Fitness'}, Call: ${leadData.preferred_call_time || 'Pending'}, Paid: ${leadData.is_paid_comfortable ? 'Yes' : 'No'}`),
+    lead_temperature: isFresh ? 'warm' : (leadData.lead_temperature || 'hot'),
+    summary: leadData.summary || (isFresh ? 'Fresh WhatsApp broadcast reply - qualification in progress' : `Goal: ${leadData.goal || 'Weight Loss'}, Call: ${leadData.preferred_call_time || 'Pending'}, Paid: ${leadData.is_paid_comfortable ? 'Yes' : 'No'}`),
     lead_stage: isFresh ? 'fresh_lead' : (leadData.lead_stage || (leadData.preferred_call_time ? 'appointment_booked' : 'qualified')),
     timestamp: new Date().toISOString()
   };
 
   try {
-    console.log(`[NeoDove] Pushing lead (${isUpdate ? 'UPDATE' : 'CREATE'}) to CRM for ${mobileNum}...`);
+    console.log(`[NeoDove] Pushing lead (${isUpdate ? 'UPDATE' : 'CREATE'}) to CRM for ${mobileNum} (${displayName})...`);
     const response = await axios.post(url, payload, {
       headers: { 'Content-Type': 'application/json' },
       timeout: 10000

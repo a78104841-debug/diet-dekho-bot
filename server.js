@@ -145,11 +145,13 @@ app.post('/webhook', async (req, res) => {
     addDebugLog('Incoming Webhook', body);
 
     let senderPhone = null;
+    let senderName = null;
     let incomingText = null;
     let messageId = null;
 
     if (body.data) {
       senderPhone = body.data.senderPhoneNumber;
+      senderName = body.data.senderName || body.data.contact?.name || body.data.sender?.name || null;
       messageId = body.data.messageId;
       // Extract from all possible WhatsApp / Finbite message types (text, button, interactive buttonReply, listReply)
       incomingText = body.data.content?.text ||
@@ -166,7 +168,9 @@ app.post('/webhook', async (req, res) => {
                      '';
     } else if (body.entry?.[0]?.changes?.[0]?.value?.messages?.[0]) {
       const msg = body.entry[0].changes[0].value.messages[0];
+      const contact = body.entry[0].changes[0].value.contacts?.[0];
       senderPhone = msg.from;
+      senderName = contact?.profile?.name || null;
       messageId = msg.id;
       incomingText = msg.text?.body ||
                      msg.button?.text ||
@@ -177,6 +181,7 @@ app.post('/webhook', async (req, res) => {
                      '';
     } else if (body.sender || body.from || body.phone) {
       senderPhone = body.sender || body.from || body.phone;
+      senderName = body.senderName || body.name || null;
       messageId = body.messageId || `${senderPhone}_${Date.now()}`;
       incomingText = body.text ||
                      body.message ||
@@ -202,11 +207,27 @@ app.post('/webhook', async (req, res) => {
 
     addDebugLog(`Message Received from ${senderPhone}: "${incomingText}"`);
     const session = getSession(senderPhone);
+    session.leadData = session.leadData || {};
+
+    // Capture and preserve Finbite sender name
+    if (senderName && typeof senderName === 'string' && senderName.trim().length > 0 && senderName.trim().toLowerCase() !== 'unknown') {
+      session.leadData.finbiteName = senderName.trim();
+      // If customer has not confirmed a different name in chat, default to Finbite name
+      if (!session.leadData.confirmedNameInChat && (!session.leadData.name || session.leadData.name.startsWith('Customer') || session.leadData.name.startsWith('Lead') || session.leadData.name.startsWith('WhatsApp'))) {
+        session.leadData.name = senderName.trim();
+      }
+    }
+
     cancelFollowup(senderPhone, session, saveSessionsToDisk);
 
-    // Native Opt-Out Guard: Finbite handles opt-out natively for "NO", "STOP", "UNSUBSCRIBE"
+    // Native Opt-Out Guard: Only treat "NO" as opt-out on initial broadcast button click or turn 0.
+    // If user is already chatting (e.g. answering "Do you have medical conditions? -> No"), do NOT suppress!
     const normalizedInput = incomingText.trim().toLowerCase();
-    if (normalizedInput === 'no' || normalizedInput === 'stop' || normalizedInput === 'unsubscribe') {
+    const isExplicitOptOut = normalizedInput === 'stop' || normalizedInput === 'unsubscribe';
+    const isBroadcastNo = (normalizedInput === 'no' || normalizedInput === 'nahi') &&
+                          (body.data?.messageType === 'button' || session.history.length === 0);
+
+    if (isExplicitOptOut || isBroadcastNo) {
       console.log(`[Opt-Out] User ${senderPhone} replied "${incomingText}". Finbite handles opt-out natively. Suppressing AI reply.`);
       session.leadData = session.leadData || {};
       session.leadData.lead_stage = 'opted_out';
@@ -221,6 +242,9 @@ app.post('/webhook', async (req, res) => {
       session.leadData = session.leadData || {};
       session.leadData.goal = 'Weight Loss';
       session.leadData.is_qualified = false;
+      if (session.leadData.finbiteName && (!session.leadData.name || session.leadData.name.startsWith('Customer') || session.leadData.name.startsWith('Lead') || session.leadData.name.startsWith('WhatsApp'))) {
+        session.leadData.name = session.leadData.finbiteName;
+      }
 
       const fastReply = "Awesome! We'd love to help you with your 15 kg weight-loss journey 🌱 To help our health coach prepare the right assessment, could you share your approximate height and current weight?";
 
@@ -230,7 +254,7 @@ app.post('/webhook', async (req, res) => {
 
       await sendWhatsAppMessage(senderPhone, fastReply);
 
-      // Register Fresh Lead in NeoDove immediately
+      // Register Fresh Lead in NeoDove immediately with Finbite profile name
       if (!session.leadData.alreadyCreatedInCrm) {
         await pushLeadToNeoDove({
           ...session.leadData,
@@ -245,6 +269,18 @@ app.post('/webhook', async (req, res) => {
       saveSessionsToDisk();
       scheduleFollowup(senderPhone, session, saveSessionsToDisk);
       return;
+    }
+
+    // Deterministic Medical Answer Guard:
+    // If previous bot message asked about health conditions and user answers "No" / "None" / "Nahi":
+    const lastBotMessage = [...session.history].reverse().find(m => m.role === 'model')?.text || '';
+    const isMedicalQuestionPending = /health conditions|thyroid|pcod|diabetes|bp|acidity|bimari/i.test(lastBotMessage);
+    if (isMedicalQuestionPending && (!session.leadData.medical_conditions || session.leadData.medical_conditions === 'None')) {
+      const lower = normalizedInput;
+      if (['no', 'nahi', 'none', 'na', 'nothing', 'no disease', 'no issue', 'fit', 'normal', 'nhi', 'not yet', 'no problems', 'sab theek'].includes(lower)) {
+        session.leadData.medical_conditions = 'None';
+        console.log(`🩺 [Deterministic Medical Match] Explicitly set medical_conditions to "None" for ${senderPhone}`);
+      }
     }
 
     // Call AI Engine with history, user message, and known lead memory
@@ -276,7 +312,20 @@ app.post('/webhook', async (req, res) => {
     // Merge and persist lead data (never overwrite existing values with null/empty)
     if (leadData && typeof leadData === 'object') {
       console.log(`[Lead Data Extracted for ${senderPhone}]:`, JSON.stringify(leadData));
+      
+      // If customer provided a confirmed name in chat, save and mark confirmed
+      if (leadData.name && typeof leadData.name === 'string' && leadData.name.trim().length > 1) {
+        const rawName = leadData.name.trim();
+        const nonNames = ['no', 'none', 'nahi', 'null', 'undefined', 'na', 'unknown'];
+        if (!nonNames.includes(rawName.toLowerCase())) {
+          session.leadData.name = rawName;
+          session.leadData.confirmedNameInChat = true;
+          console.log(`👤 [CONFIRMED NAME] Customer shared real name in chat: "${rawName}" for ${senderPhone}`);
+        }
+      }
+
       for (const [key, val] of Object.entries(leadData)) {
+        if (key === 'name') continue; // Handled above
         if (val !== null && val !== undefined && val !== '') {
           session.leadData[key] = val;
         }
@@ -285,35 +334,36 @@ app.post('/webhook', async (req, res) => {
 
     // 1. Fresh Lead Registration: Register on NeoDove on very first inbound contact
     if (!session.leadData.alreadyCreatedInCrm) {
-      console.log(`📥 [NEODOVE FRESH LEAD] Creating initial lead for ${senderPhone}...`);
+      console.log(`📥 [NEODOVE FRESH LEAD] Creating initial lead for ${senderPhone} (Name: ${session.leadData.name || session.leadData.finbiteName || 'Fresh Lead'})...`);
       const freshLeadPayload = {
         ...session.leadData,
+        name: session.leadData.name || session.leadData.finbiteName,
         lead_stage: 'fresh_lead',
-        lead_temperature: 'cold',
+        lead_temperature: 'warm',
         is_qualified: false,
-        summary: `Fresh inquiry. First message: "${incomingText.substring(0, 100)}"`
+        summary: `Fresh broadcast reply. First message: "${incomingText.substring(0, 100)}"`
       };
       const created = await pushLeadToNeoDove(freshLeadPayload, senderPhone, false);
       if (created) {
         session.leadData.alreadyCreatedInCrm = true;
       }
-    }
+    } else {
+      // 2. Real-Time NeoDove CRM Sync: Update as soon as name, call time, or health stats arrive
+      const hasConfirmedName = Boolean(session.leadData.confirmedNameInChat && leadData?.name);
+      const hasCallTime = Boolean(session.leadData.preferred_call_time);
+      const hasStats = Boolean(leadData?.current_weight || leadData?.medical_conditions || leadData?.is_paid_comfortable !== undefined);
 
-    // 2. Lead Qualification / Call Booking Update: Update lead in NeoDove when details/call booked
-    const isQualifiedNow = session.leadData.is_qualified ||
-                           Boolean(session.leadData.preferred_call_time) ||
-                           (session.leadData.name && session.leadData.goal && session.leadData.is_paid_comfortable);
+      if (hasConfirmedName || hasCallTime || hasStats) {
+        if (hasCallTime) {
+          session.leadData.lead_stage = 'appointment_booked';
+          session.leadData.lead_temperature = 'hot';
+          session.leadData.is_qualified = true;
+        } else if (session.leadData.is_paid_comfortable) {
+          session.leadData.lead_stage = 'qualified';
+          session.leadData.lead_temperature = 'hot';
+        }
 
-    if (isQualifiedNow) {
-      if (!session.leadData.alreadyQualifiedInCrm) {
-        console.log(`🎉 [LEAD QUALIFIED] Updating lead to Qualified/Call Booked in NeoDove CRM for ${senderPhone}...`);
-        session.leadData.lead_stage = session.leadData.preferred_call_time ? 'appointment_booked' : 'qualified';
-        session.leadData.lead_temperature = 'hot';
-        session.leadData.is_qualified = true;
-        const updated = await pushLeadToNeoDove(session.leadData, senderPhone, true);
-        if (updated) session.leadData.alreadyQualifiedInCrm = true;
-      } else if (leadData && (leadData.preferred_call_time || leadData.name || leadData.current_weight || leadData.city)) {
-        console.log(`🔄 [LEAD UPDATE] Pushing updated details to NeoDove CRM for ${senderPhone}...`);
+        console.log(`🔄 [NEODOVE SYNC] Updating lead in NeoDove CRM for ${senderPhone} (Name: ${session.leadData.name}, Stage: ${session.leadData.lead_stage})...`);
         await pushLeadToNeoDove(session.leadData, senderPhone, true);
       }
     }
