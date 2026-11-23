@@ -132,18 +132,30 @@ async function checkAndExecuteDueFollowups(sessions, saveSessionsToDisk) {
         continue;
       }
 
-      console.log(`🔔 [Follow-up Triggered] Executing smart photo follow-up for ${phone}...`);
+      console.log(`🔔 [Follow-up Triggered] Executing smart follow-up for ${phone}...`);
       session.followupPending = false;
       session.followupCount = (session.followupCount || 0) + 1;
 
-      // Select one of the 5 curated transformation photos
-      const photoIndex = (session.followupCount - 1) % TRANSFORMATION_PHOTOS.length;
-      const selectedPhoto = TRANSFORMATION_PHOTOS[photoIndex];
-      const botHost = process.env.BASE_URL || 'https://diet-dekho-bot.onrender.com';
-      const imageUrl = `${botHost}/media/${selectedPhoto.file}`;
+      // STRICT RULE: Photo is ONLY sent as an initial icebreaker when customer ghosted at Step 1 (awaiting height/weight).
+      // Once details/chat are active or scheduling a call, send pure human text (NO marketing photo spam).
+      const isAwaitingHeightWeight = !session.leadData?.current_weight && !session.leadData?.height;
+      const shouldSendPhoto = isAwaitingHeightWeight && session.followupCount === 1;
 
       try {
-        const followUpInstruction = `[SYSTEM NOTE: The user stopped responding. We are sharing an inspiring client transformation photo (${selectedPhoto.hook} without gym/starvation). Write a warm, encouraging 2-line WhatsApp caption in natural Hindi/Hinglish to accompany this photo. Ask for their missing detail (e.g. current weight and height if awaiting assessment, or 10-minute call time if already qualified). Keep it 2 lines max, 1 emoji, zero tech talk.]`;
+        let followUpInstruction;
+        let selectedPhoto = null;
+        let imageUrl = null;
+
+        if (shouldSendPhoto) {
+          const photoIndex = 0; // transform_14kg.jpg (14kg in 3 months matches 15kg campaign)
+          selectedPhoto = TRANSFORMATION_PHOTOS[photoIndex];
+          const botHost = process.env.BASE_URL || 'https://diet-dekho-bot.onrender.com';
+          imageUrl = `${botHost}/media/${selectedPhoto.file}`;
+          followUpInstruction = `[SYSTEM NOTE: User stopped responding after tapping YES. We are sending an inspiring client transformation photo (${selectedPhoto.hook} with home food). Write a warm, encouraging 2-line WhatsApp caption to accompany this photo, asking for their height & current weight to prepare their diet assessment. 2 lines max, natural tone, zero tech talk.]`;
+        } else {
+          // Warm, personal 1-on-1 human dietitian text message
+          followUpInstruction = `[SYSTEM NOTE: The user paused the conversation. Write a warm, friendly, natural 1-on-1 human message (like a caring nutritionist on WhatsApp). Pick up naturally based on last context (e.g. asking for call slot between 10 AM to 6:30 PM). Keep it short (2 lines), 1 emoji, polite and personal. DO NOT pitch or sell aggressively.]`;
+        }
 
         const { replyText } = await generateGeminiReply(
           session.history,
@@ -153,12 +165,17 @@ async function checkAndExecuteDueFollowups(sessions, saveSessionsToDisk) {
         );
 
         if (replyText) {
-          // Send visual transformation photo + personalized caption via WhatsApp
-          await sendWhatsAppImage(phone, imageUrl, replyText);
+          if (shouldSendPhoto && imageUrl) {
+            await sendWhatsAppImage(phone, imageUrl, replyText);
+            console.log(`✅ [Follow-up Delivered with Photo] Sent to ${phone}: ${imageUrl} | "${replyText.substring(0, 80)}..."`);
+          } else {
+            await sendWhatsAppMessage(phone, replyText);
+            console.log(`✅ [Follow-up Delivered as Clean Text] Sent to ${phone}: "${replyText.substring(0, 80)}..."`);
+          }
+
           session.history.push({ role: 'user', text: followUpInstruction });
           session.history.push({ role: 'model', text: replyText });
           if (session.history.length > 20) session.history = session.history.slice(-20);
-          console.log(`✅ [Follow-up Delivered with Photo] Sent to ${phone}: ${imageUrl} | "${replyText.substring(0, 80)}..."`);
         }
 
         // If this was follow-up 1, schedule follow-up 2 for tomorrow morning / 12 hours later

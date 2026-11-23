@@ -69,10 +69,8 @@ async function sendWhatsAppImage(to, imageUrl, caption = '') {
     to: cleanTo,
     phoneNoId: String(phoneNoId),
     type: 'image',
-    image: {
-      link: imageUrl,
-      caption: caption
-    }
+    url: imageUrl,
+    caption: caption
   };
 
   try {
