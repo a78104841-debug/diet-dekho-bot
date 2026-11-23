@@ -10,6 +10,8 @@ const { scheduleFollowup, cancelFollowup, checkAndExecuteDueFollowups } = requir
 
 const app = express();
 app.use(express.json());
+// Serve optimized transformation photos
+app.use('/media', express.static(path.join(__dirname, 'public/media')));
 
 // File-backed session persistence so user details are NEVER lost on restart
 const DATA_DIR = path.join(__dirname, 'data');
@@ -68,6 +70,36 @@ app.get('/debug', (req, res) => {
     status: 'online',
     totalSessions: sessions.size,
     recentLogs: debugLogs.slice(-20)
+  });
+});
+
+// Comprehensive Lead Intelligence Endpoint
+app.get('/api/leads', (req, res) => {
+  const allLeads = [];
+  for (const [phone, sess] of sessions.entries()) {
+    const lastMsg = sess.history && sess.history.length > 0 ? sess.history[sess.history.length - 1] : null;
+    allLeads.push({
+      phone,
+      name: sess.leadData?.name || sess.leadData?.finbiteName || 'Unknown',
+      stage: sess.leadData?.lead_stage || (sess.leadData?.preferred_call_time ? 'appointment_booked' : (sess.history.length > 2 ? 'discovery' : 'fresh_lead')),
+      goal: sess.leadData?.goal || 'Weight Loss',
+      height: sess.leadData?.height || null,
+      current_weight: sess.leadData?.current_weight || null,
+      target_weight: sess.leadData?.target_weight || null,
+      medical_conditions: sess.leadData?.medical_conditions || null,
+      call_time: sess.leadData?.preferred_call_time || null,
+      is_paid_comfortable: sess.leadData?.is_paid_comfortable !== undefined ? sess.leadData?.is_paid_comfortable : null,
+      followupPending: sess.followupPending || false,
+      followupCount: sess.followupCount || 0,
+      totalMessages: sess.history?.length || 0,
+      lastMessage: lastMsg ? { role: lastMsg.role, text: lastMsg.text?.substring(0, 120) } : null,
+      lastUpdated: sess.lastUpdated || null
+    });
+  }
+  res.json({
+    timestamp: new Date().toISOString(),
+    totalLeads: allLeads.length,
+    leads: allLeads
   });
 });
 

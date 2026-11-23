@@ -1,6 +1,15 @@
 const axios = require('axios');
 const { generateGeminiReply } = require('./gemini');
-const { sendWhatsAppMessage } = require('./whatsapp');
+const { sendWhatsAppMessage, sendWhatsAppImage } = require('./whatsapp');
+
+// 5 Curated, high-converting client transformation photos (~100 KB each)
+const TRANSFORMATION_PHOTOS = [
+  { file: 'transform_14kg.jpg', hook: '14 kg वज़न 3 महीने में घर के खाने से घटाया' },
+  { file: 'transform_12kg.jpg', hook: '12 kg वज़न 3 महीने में घटाया' },
+  { file: 'transform_19kg.jpg', hook: '19 kg वज़न 3 महीने में कम किया' },
+  { file: 'transform_22kg.jpg', hook: '22 kg का अद्भुत ट्रांसफॉर्मेशन' },
+  { file: 'transform_6kg.jpg', hook: '6 kg वज़न और बेहतरीन इंच लॉस किया' }
+];
 
 /**
  * Check if current time in IST is within active hours (09:00 AM to 09:30 PM)
@@ -123,12 +132,18 @@ async function checkAndExecuteDueFollowups(sessions, saveSessionsToDisk) {
         continue;
       }
 
-      console.log(`🔔 [Follow-up Triggered] Executing smart follow-up for ${phone}...`);
+      console.log(`🔔 [Follow-up Triggered] Executing smart photo follow-up for ${phone}...`);
       session.followupPending = false;
       session.followupCount = (session.followupCount || 0) + 1;
 
+      // Select one of the 5 curated transformation photos
+      const photoIndex = (session.followupCount - 1) % TRANSFORMATION_PHOTOS.length;
+      const selectedPhoto = TRANSFORMATION_PHOTOS[photoIndex];
+      const botHost = process.env.BASE_URL || 'https://diet-dekho-bot.onrender.com';
+      const imageUrl = `${botHost}/media/${selectedPhoto.file}`;
+
       try {
-        const followUpInstruction = `[SYSTEM NOTE: The user stopped responding. Generate a warm, gentle, context-aware follow-up message strictly adhering to Section 7 of the system prompt. Ask for the missing detail (e.g. call time between 10:00 AM and 6:30 PM, or health goal). Keep it 2 lines max.]`;
+        const followUpInstruction = `[SYSTEM NOTE: The user stopped responding. We are sharing an inspiring client transformation photo (${selectedPhoto.hook} without gym/starvation). Write a warm, encouraging 2-line WhatsApp caption in natural Hindi/Hinglish to accompany this photo. Ask for their missing detail (e.g. current weight and height if awaiting assessment, or 10-minute call time if already qualified). Keep it 2 lines max, 1 emoji, zero tech talk.]`;
 
         const { replyText } = await generateGeminiReply(
           session.history,
@@ -138,11 +153,12 @@ async function checkAndExecuteDueFollowups(sessions, saveSessionsToDisk) {
         );
 
         if (replyText) {
-          await sendWhatsAppMessage(phone, replyText);
+          // Send visual transformation photo + personalized caption via WhatsApp
+          await sendWhatsAppImage(phone, imageUrl, replyText);
           session.history.push({ role: 'user', text: followUpInstruction });
           session.history.push({ role: 'model', text: replyText });
           if (session.history.length > 20) session.history = session.history.slice(-20);
-          console.log(`✅ [Follow-up Delivered] Sent to ${phone}: "${replyText.substring(0, 80)}..."`);
+          console.log(`✅ [Follow-up Delivered with Photo] Sent to ${phone}: ${imageUrl} | "${replyText.substring(0, 80)}..."`);
         }
 
         // If this was follow-up 1, schedule follow-up 2 for tomorrow morning / 12 hours later
