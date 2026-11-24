@@ -73,8 +73,8 @@ function scheduleFollowup(phone, session, saveSessionsToDisk) {
   if (!session) return;
 
   // STRICT RULE: Only stop follow-ups if preferred_call_time is ALREADY booked!
-  if (session.leadData?.preferred_call_time && String(session.leadData.preferred_call_time).trim() !== '') {
-    console.log(`[Follow-up] Skipping: Call already booked for ${phone} at "${session.leadData.preferred_call_time}"`);
+  if ((session.leadData?.preferred_call_time && String(session.leadData.preferred_call_time).trim() !== '') || session.leadData?.lead_stage === 'appointment_booked') {
+    console.log(`[Follow-up] Skipping: Call already booked for ${phone}`);
     session.followupPending = false;
     return;
   }
@@ -112,7 +112,7 @@ async function checkAndExecuteDueFollowups(sessions, saveSessionsToDisk) {
     if (!session.followupPending || !session.followupDueAt) continue;
 
     // If call already booked in meantime, cancel
-    if (session.leadData?.preferred_call_time && String(session.leadData.preferred_call_time).trim() !== '') {
+    if ((session.leadData?.preferred_call_time && String(session.leadData.preferred_call_time).trim() !== '') || session.leadData?.lead_stage === 'appointment_booked') {
       session.followupPending = false;
       continue;
     }
@@ -151,7 +151,12 @@ async function checkAndExecuteDueFollowups(sessions, saveSessionsToDisk) {
           selectedPhoto = TRANSFORMATION_PHOTOS[photoIndex];
           const botHost = process.env.BASE_URL || 'https://diet-dekho-bot.onrender.com';
           imageUrl = `${botHost}/media/${selectedPhoto.file}`;
-          followUpInstruction = `[SYSTEM NOTE: User stopped responding after tapping YES. We are sending an inspiring client transformation photo (${selectedPhoto.hook} with home food). Write a warm, encouraging 2-line WhatsApp caption to accompany this photo, asking for their height & current weight to prepare their diet assessment. 2 lines max, natural tone, zero tech talk.]`;
+          followUpInstruction = `[CRITICAL SYSTEM DIRECTIVE:
+1. UNDER NO CIRCUMSTANCES CONGRATULATE THE USER/PROSPECT. The attached photo shows a past Diet Dekho client who achieved this transformation, NOT the user! The user is overweight and still trying to lose weight!
+2. Absolutely DO NOT say words like "बधाई", "congratulations", "शानदार बदलाव आपका", "आपका ट्रांसफॉर्मेशन", "आपका परिवर्तन", or imply this is their achievement.
+3. Write a warm 2-line WhatsApp caption presenting this client's success as motivation:
+"देखिए हमारे एक क्लाइंट ने घर के सादे खाने से 3 महीने में 14 kg वज़न घटाया 🌱 आपका 15 kg वेट लॉस असेसमेंट तैयार करने के लिए बस आपकी हाइट और वर्तमान वज़न बता दीजिए।"
+4. Keep it under 2 lines, friendly Hindi/Hinglish, max 1 emoji, zero tech talk.]`;
         } else {
           // Warm, personal 1-on-1 human dietitian text message
           followUpInstruction = `[SYSTEM NOTE: The user paused the conversation. Write a warm, friendly, natural 1-on-1 human message (like a caring nutritionist on WhatsApp). Pick up naturally based on last context (e.g. asking for call slot between 10 AM to 6:30 PM). Keep it short (2 lines), 1 emoji, polite and personal. DO NOT pitch or sell aggressively.]`;
@@ -165,16 +170,32 @@ async function checkAndExecuteDueFollowups(sessions, saveSessionsToDisk) {
         );
 
         if (replyText) {
+          let sanitizedReply = replyText;
+          if (shouldSendPhoto) {
+            // Unbreakable safety filter against congratulating prospect on transformation photo
+            const forbiddenPhrases = [
+              'बधाई', 'congratulat', 'शानदार बदलाव आपका', 'आपका ट्रांसफॉर्मेशन',
+              'आपका परिवर्तन देखकर', 'आपका यह ट्रांसफॉर्मेशन', 'आपका ये ट्रांसफॉर्मेशन',
+              'आपका वजन कम होना सच में प्रेरणादायक', 'आपका अद्भुत बदलाव', 'आपकी मेहनत रंग लाई',
+              'आपका ये बदलाव'
+            ];
+            const hasCongratulation = forbiddenPhrases.some(phrase => sanitizedReply.toLowerCase().includes(phrase));
+            if (hasCongratulation) {
+              console.warn(`⚠️ [Follow-up Safety Filter Triggered] AI generated congratulatory text for prospect. Replacing with safe client showcase caption.`);
+              sanitizedReply = `देखिए हमारे एक क्लाइंट ने घर के सादे खाने से 3 महीने में 14 kg वज़न घटाया 🌱\n\nआपका 15 kg वेट लॉस असेसमेंट तैयार करने के लिए बस आपकी हाइट और वर्तमान वज़न बता दीजिए!`;
+            }
+          }
+
           if (shouldSendPhoto && imageUrl) {
-            await sendWhatsAppImage(phone, imageUrl, replyText);
-            console.log(`✅ [Follow-up Delivered with Photo] Sent to ${phone}: ${imageUrl} | "${replyText.substring(0, 80)}..."`);
+            await sendWhatsAppImage(phone, imageUrl, sanitizedReply);
+            console.log(`✅ [Follow-up Delivered with Photo] Sent to ${phone}: ${imageUrl} | "${sanitizedReply.substring(0, 80)}..."`);
           } else {
-            await sendWhatsAppMessage(phone, replyText);
-            console.log(`✅ [Follow-up Delivered as Clean Text] Sent to ${phone}: "${replyText.substring(0, 80)}..."`);
+            await sendWhatsAppMessage(phone, sanitizedReply);
+            console.log(`✅ [Follow-up Delivered as Clean Text] Sent to ${phone}: "${sanitizedReply.substring(0, 80)}..."`);
           }
 
           session.history.push({ role: 'user', text: followUpInstruction });
-          session.history.push({ role: 'model', text: replyText });
+          session.history.push({ role: 'model', text: sanitizedReply });
           if (session.history.length > 20) session.history = session.history.slice(-20);
         }
 

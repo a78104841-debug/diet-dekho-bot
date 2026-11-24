@@ -7,6 +7,7 @@ const { generateGeminiReply } = require('./gemini');
 const { sendWhatsAppMessage } = require('./whatsapp');
 const { pushLeadToNeoDove } = require('./neodove');
 const { scheduleFollowup, cancelFollowup, checkAndExecuteDueFollowups } = require('./followup');
+const { getISTTimeInfo, cleanHumanName } = require('./utils');
 
 const app = express();
 app.use(express.json());
@@ -241,12 +242,22 @@ app.post('/webhook', async (req, res) => {
     const session = getSession(senderPhone);
     session.leadData = session.leadData || {};
 
-    // Capture and preserve Finbite sender name
+    // Capture and clean Finbite sender name (filter weird/business/emoji handles)
     if (senderName && typeof senderName === 'string' && senderName.trim().length > 0 && senderName.trim().toLowerCase() !== 'unknown') {
-      session.leadData.finbiteName = senderName.trim();
-      // If customer has not confirmed a different name in chat, default to Finbite name
-      if (!session.leadData.confirmedNameInChat && (!session.leadData.name || session.leadData.name.startsWith('Customer') || session.leadData.name.startsWith('Lead') || session.leadData.name.startsWith('WhatsApp'))) {
-        session.leadData.name = senderName.trim();
+      session.leadData.finbiteRawName = senderName.trim();
+      const validHumanName = cleanHumanName(senderName);
+      if (validHumanName) {
+        session.leadData.finbiteName = validHumanName;
+        // If customer has not confirmed a different name in chat, use valid human name
+        if (!session.leadData.confirmedNameInChat && (!session.leadData.name || session.leadData.name.startsWith('Customer') || session.leadData.name.startsWith('Lead') || session.leadData.name.startsWith('WhatsApp'))) {
+          session.leadData.name = validHumanName;
+        }
+      } else {
+        console.log(`🧹 [Name Filtered] Ignored weird/commercial profile name "${senderName}" for ${senderPhone}`);
+        // If name is not confirmed in chat and was set to an invalid handle, clear it
+        if (!session.leadData.confirmedNameInChat) {
+          session.leadData.name = null;
+        }
       }
     }
 
@@ -268,17 +279,47 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // Fast-Path: When user clicks/types "YES" to the broadcast, reply instantly asking for Height & Weight
-    if (normalizedInput === 'yes') {
-      console.log(`⚡ [Fast-Path YES] Instant broadcast response asking for Height & Weight for ${senderPhone}...`);
+    // Call Booked Guard: Once call is booked, any affirmative reply ("Yes", "Ok", "Haan", etc.) confirms appointment and NEVER restarts funnel
+    const isCallAlreadyBooked = Boolean(
+      (session.leadData?.preferred_call_time && String(session.leadData.preferred_call_time).trim() !== '') ||
+      session.leadData?.lead_stage === 'appointment_booked'
+    );
+    const affirmativeKeywords = ['yes', 'haan', 'ha', 'ok', 'okay', 'sure', 'theek hai', 'done', 'yes mam', 'yes sir', 'shukriya', 'thanks', 'thank you', 'bilkul', 'ji'];
+
+    if (isCallAlreadyBooked && affirmativeKeywords.includes(normalizedInput)) {
+      const callTime = session.leadData.preferred_call_time || 'तय समय';
+      console.log(`📞 [Call Already Booked] User ${senderPhone} replied "${incomingText}". Acknowledging confirmed appointment (${callTime}) without resetting funnel.`);
+      
+      const confirmReply = `बहुत बढ़िया! आपकी 10-मिनट की कंसल्टेशन कॉल आज ${callTime} के लिए कन्फर्म है 🌱 हमारे सीनियर हेल्थ एक्सपर्ट आपसे ठीक समय पर बात करेंगे।`;
+
+      session.history.push({ role: 'user', text: incomingText });
+      session.history.push({ role: 'model', text: confirmReply });
+      session.lastUpdated = new Date();
+
+      await sendWhatsAppMessage(senderPhone, confirmReply);
+      saveSessionsToDisk();
+      return;
+    }
+
+    // Fast-Path: ONLY when user clicks/types "YES" to the initial broadcast at Step 1 (NO call booked, NO vitals shared, NO active history)
+    const hasAlreadySharedVitals = Boolean(session.leadData?.current_weight || session.leadData?.height);
+    const hasActiveHistory = Array.isArray(session.history) && session.history.length > 0;
+
+    if ((normalizedInput === 'yes' || normalizedInput === 'haan') && !isCallAlreadyBooked && !hasAlreadySharedVitals && !hasActiveHistory) {
+      console.log(`⚡ [Fast-Path YES] Initial broadcast response asking for Height & Weight for ${senderPhone}...`);
       session.leadData = session.leadData || {};
       session.leadData.goal = 'Weight Loss';
       session.leadData.is_qualified = false;
-      if (session.leadData.finbiteName && (!session.leadData.name || session.leadData.name.startsWith('Customer') || session.leadData.name.startsWith('Lead') || session.leadData.name.startsWith('WhatsApp'))) {
-        session.leadData.name = session.leadData.finbiteName;
-      }
 
-      const fastReply = "Awesome! We'd love to help you with your 15 kg weight-loss journey 🌱 To help our health coach prepare the right assessment, could you share your approximate height and current weight?";
+      const istTime = getISTTimeInfo();
+      const cleanName = session.leadData.name ? cleanHumanName(session.leadData.name) : null;
+
+      let fastReply;
+      if (cleanName) {
+        fastReply = `Awesome ${cleanName}! We'd love to help you with your 15 kg weight-loss journey 🌱 To help our health coach prepare the right assessment, could you share your approximate height and current weight?`;
+      } else {
+        fastReply = `${istTime.greetingHindi}! We'd love to help you with your 15 kg weight-loss journey 🌱 To help our health coach prepare the right assessment, could you share your approximate height and current weight?`;
+      }
 
       session.history.push({ role: 'user', text: incomingText });
       session.history.push({ role: 'model', text: fastReply });
@@ -286,10 +327,11 @@ app.post('/webhook', async (req, res) => {
 
       await sendWhatsAppMessage(senderPhone, fastReply);
 
-      // Register Fresh Lead in NeoDove immediately with Finbite profile name
+      // Register Fresh Lead in NeoDove immediately with clean name or fallback
       if (!session.leadData.alreadyCreatedInCrm) {
         await pushLeadToNeoDove({
           ...session.leadData,
+          name: session.leadData.name || session.leadData.finbiteName || 'Fresh Lead',
           lead_stage: 'fresh_lead',
           lead_temperature: 'warm',
           is_qualified: false,
@@ -345,14 +387,13 @@ app.post('/webhook', async (req, res) => {
     if (leadData && typeof leadData === 'object') {
       console.log(`[Lead Data Extracted for ${senderPhone}]:`, JSON.stringify(leadData));
       
-      // If customer provided a confirmed name in chat, save and mark confirmed
+      // If customer provided a confirmed name in chat, validate and save
       if (leadData.name && typeof leadData.name === 'string' && leadData.name.trim().length > 1) {
-        const rawName = leadData.name.trim();
-        const nonNames = ['no', 'none', 'nahi', 'null', 'undefined', 'na', 'unknown'];
-        if (!nonNames.includes(rawName.toLowerCase())) {
-          session.leadData.name = rawName;
+        const validName = cleanHumanName(leadData.name.trim());
+        if (validName) {
+          session.leadData.name = validName;
           session.leadData.confirmedNameInChat = true;
-          console.log(`👤 [CONFIRMED NAME] Customer shared real name in chat: "${rawName}" for ${senderPhone}`);
+          console.log(`👤 [CONFIRMED NAME] Customer shared real name in chat: "${validName}" for ${senderPhone}`);
         }
       }
 

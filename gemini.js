@@ -1,5 +1,6 @@
 const axios = require('axios');
 const systemPrompt = require('./system_prompt');
+const { getISTTimeInfo } = require('./utils');
 
 /**
  * Call AI Engine for Diet Dekho WhatsApp Bot.
@@ -21,7 +22,14 @@ async function generateGeminiReply(history = [], userMessage = '', existingLeadD
     'qwen/qwen3.8-27b'
   ];
 
+  const istInfo = getISTTimeInfo();
   let dynamicSystemPrompt = systemPrompt;
+  dynamicSystemPrompt += `\n\n## CURRENT TIME & GREETING CONTEXT (IST)
+- Current Time: ${istInfo.formattedTime}
+- Appropriate Greeting (Hindi): "${istInfo.greetingHindi}"
+- Appropriate Greeting (English): "${istInfo.greetingEnglish}"
+- GREETING RULE: If customer name is missing, invalid, or commercial (e.g. cooker, coach, shop, collection, emojis), NEVER use that handle! Greet them warmly using "${istInfo.greetingHindi}" (or "${istInfo.greetingEnglish}").`;
+
   if (existingLeadData && Object.keys(existingLeadData).length > 0) {
     const knownFields = Object.entries(existingLeadData)
       .filter(([_, v]) => v !== null && v !== '' && (!Array.isArray(v) || v.length > 0))
