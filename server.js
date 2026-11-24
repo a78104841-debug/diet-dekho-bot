@@ -357,6 +357,16 @@ app.post('/webhook', async (req, res) => {
       }
     }
 
+    // Deterministic Immediate Call Intent Guard ("Abhi", "Right now", "Abhi kar sakte hain", "Call me now"):
+    const isImmediateCallRequest = /\babhi\b|right now|call now|turant|call me now|abhi kar/i.test(normalizedInput);
+    if (isImmediateCallRequest) {
+      session.leadData.preferred_call_time = 'Immediately (अगले 5-10 मिनट में)';
+      session.leadData.lead_stage = 'appointment_booked';
+      session.leadData.lead_temperature = 'hot';
+      session.leadData.is_qualified = true;
+      console.log(`🚨 [Immediate Call Requested] User ${senderPhone} asked for immediate call. Set preferred_call_time to Immediately.`);
+    }
+
     // Call AI Engine with history, user message, and known lead memory
     const { replyText, leadData, interactionId } = await generateGeminiReply(
       session.history,
