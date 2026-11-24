@@ -1,6 +1,6 @@
 const axios = require('axios');
 const systemPrompt = require('./system_prompt');
-const { getISTTimeInfo } = require('./utils');
+const { getISTTimeInfo, stripEmojis } = require('./utils');
 
 /**
  * Call AI Engine for Diet Dekho WhatsApp Bot.
@@ -195,6 +195,9 @@ function parseReply(rawReply, interactionId = null) {
     }
     cleanReplyText = cleanReplyText.replace(emergencyJsonRegex, '').trim();
   }
+
+  // Strict Zero-Emoji Guard on parsed model reply
+  cleanReplyText = stripEmojis(cleanReplyText);
 
   return {
     replyText: cleanReplyText,

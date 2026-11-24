@@ -1,6 +1,7 @@
 const axios = require('axios');
 const { generateGeminiReply } = require('./gemini');
 const { sendWhatsAppMessage, sendWhatsAppImage } = require('./whatsapp');
+const { stripEmojis } = require('./utils');
 
 // 5 Curated, high-converting client transformation photos (~100 KB each)
 const TRANSFORMATION_PHOTOS = [
@@ -60,6 +61,7 @@ function calculateFollowupDelayMs() {
 function cancelFollowup(phone, session, saveSessionsToDisk) {
   if (session) {
     session.followupPending = false;
+    session.followupDueAt = null;
     session.followupCount = 0; // Reset count on active reply
     if (saveSessionsToDisk) saveSessionsToDisk();
     console.log(`[Follow-up] Cancelled pending follow-up for ${phone}`);
@@ -76,13 +78,19 @@ function scheduleFollowup(phone, session, saveSessionsToDisk) {
   if ((session.leadData?.preferred_call_time && String(session.leadData.preferred_call_time).trim() !== '') || session.leadData?.lead_stage === 'appointment_booked') {
     console.log(`[Follow-up] Skipping: Call already booked for ${phone}`);
     session.followupPending = false;
+    session.followupDueAt = null;
     return;
   }
 
-  // Skip if customer explicitly opted out or is not interested
-  if (session.leadData?.lead_stage === 'opted_out' || session.leadData?.lead_stage === 'not_interested' || session.leadData?.is_paid_comfortable === false) {
-    console.log(`[Follow-up] Skipping: User opted out or not interested for ${phone}`);
+  // Skip and kill if customer explicitly opted out, not interested, or unqualified
+  const isUnqualifiedOrRejected = ['opted_out', 'not_interested', 'unqualified', 'disqualified'].includes(session.leadData?.lead_stage) ||
+                                  session.leadData?.is_paid_comfortable === false;
+
+  if (isUnqualifiedOrRejected) {
+    console.log(`[Follow-up] Skipping & Cancelling: Lead is disqualified/not interested for ${phone}`);
     session.followupPending = false;
+    session.followupDueAt = null;
+    if (saveSessionsToDisk) saveSessionsToDisk();
     return;
   }
 
@@ -90,6 +98,7 @@ function scheduleFollowup(phone, session, saveSessionsToDisk) {
   if ((session.followupCount || 0) >= 2) {
     console.log(`[Follow-up] Skipping: Max follow-ups (2) already sent for ${phone}`);
     session.followupPending = false;
+    session.followupDueAt = null;
     return;
   }
 
@@ -114,11 +123,18 @@ async function checkAndExecuteDueFollowups(sessions, saveSessionsToDisk) {
     // If call already booked in meantime, cancel
     if ((session.leadData?.preferred_call_time && String(session.leadData.preferred_call_time).trim() !== '') || session.leadData?.lead_stage === 'appointment_booked') {
       session.followupPending = false;
+      session.followupDueAt = null;
       continue;
     }
 
-    if (session.leadData?.lead_stage === 'opted_out' || session.leadData?.lead_stage === 'not_interested' || session.leadData?.is_paid_comfortable === false || (session.followupCount || 0) >= 2) {
+    const isUnqualifiedOrRejected = ['opted_out', 'not_interested', 'unqualified', 'disqualified'].includes(session.leadData?.lead_stage) ||
+                                    session.leadData?.is_paid_comfortable === false ||
+                                    (session.followupCount || 0) >= 2;
+
+    if (isUnqualifiedOrRejected) {
       session.followupPending = false;
+      session.followupDueAt = null;
+      if (saveSessionsToDisk) saveSessionsToDisk();
       continue;
     }
 
@@ -155,11 +171,11 @@ async function checkAndExecuteDueFollowups(sessions, saveSessionsToDisk) {
 1. UNDER NO CIRCUMSTANCES CONGRATULATE THE USER/PROSPECT. The attached photo shows a past Diet Dekho client who achieved this transformation, NOT the user! The user is overweight and still trying to lose weight!
 2. Absolutely DO NOT say words like "बधाई", "congratulations", "शानदार बदलाव आपका", "आपका ट्रांसफॉर्मेशन", "आपका परिवर्तन", or imply this is their achievement.
 3. Write a warm 2-line WhatsApp caption presenting this client's success as motivation:
-"देखिए हमारे एक क्लाइंट ने घर के सादे खाने से 3 महीने में 14 kg वज़न घटाया 🌱 आपका 15 kg वेट लॉस असेसमेंट तैयार करने के लिए बस आपकी हाइट और वर्तमान वज़न बता दीजिए।"
-4. Keep it under 2 lines, friendly Hindi/Hinglish, max 1 emoji, zero tech talk.]`;
+"देखिए हमारे एक क्लाइंट ने घर के सादे खाने से 3 महीने में 14 kg वज़न घटाया। आपका 15 kg वेट लॉस असेसमेंट तैयार करने के लिए बस आपकी उम्र, वर्तमान वज़न और हाइट बता दीजिए।"
+4. Keep it under 2 lines, friendly Hindi/Hinglish, zero emojis, zero tech talk.]`;
         } else {
           // Warm, personal 1-on-1 human dietitian text message
-          followUpInstruction = `[SYSTEM NOTE: The user paused the conversation. Write a warm, friendly, natural 1-on-1 human message (like a caring nutritionist on WhatsApp). Pick up naturally based on last context (e.g. asking for call slot between 10 AM to 6:30 PM). Keep it short (2 lines), 1 emoji, polite and personal. DO NOT pitch or sell aggressively.]`;
+          followUpInstruction = `[SYSTEM NOTE: The user paused the conversation. Write a warm, friendly, natural 1-on-1 human message (like a caring nutritionist assistant on WhatsApp). Pick up naturally based on last context (e.g. asking for call slot between 10 AM to 6:30 PM). Keep it short (2 lines), zero emojis, polite and personal. DO NOT pitch or sell aggressively.]`;
         }
 
         const { replyText } = await generateGeminiReply(
@@ -182,9 +198,12 @@ async function checkAndExecuteDueFollowups(sessions, saveSessionsToDisk) {
             const hasCongratulation = forbiddenPhrases.some(phrase => sanitizedReply.toLowerCase().includes(phrase));
             if (hasCongratulation) {
               console.warn(`⚠️ [Follow-up Safety Filter Triggered] AI generated congratulatory text for prospect. Replacing with safe client showcase caption.`);
-              sanitizedReply = `देखिए हमारे एक क्लाइंट ने घर के सादे खाने से 3 महीने में 14 kg वज़न घटाया 🌱\n\nआपका 15 kg वेट लॉस असेसमेंट तैयार करने के लिए बस आपकी हाइट और वर्तमान वज़न बता दीजिए!`;
+              sanitizedReply = `देखिए हमारे एक क्लाइंट ने घर के सादे खाने से 3 महीने में 14 kg वज़न घटाया।\n\nआपका 15 kg वेट लॉस असेसमेंट तैयार करने के लिए बस आपकी उम्र, वर्तमान वज़न और हाइट बता दीजिए!`;
             }
           }
+
+          // Strict Zero Emoji Filter on all outbound messages
+          sanitizedReply = stripEmojis(sanitizedReply);
 
           if (shouldSendPhoto && imageUrl) {
             await sendWhatsAppImage(phone, imageUrl, sanitizedReply);

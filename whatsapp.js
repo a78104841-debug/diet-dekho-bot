@@ -1,4 +1,5 @@
 const axios = require('axios');
+const { stripEmojis } = require('./utils');
 
 /**
  * Send a WhatsApp text message via Finbite API
@@ -18,13 +19,16 @@ async function sendWhatsAppMessage(to, text) {
   // Clean the recipient phone number (remove +, spaces, hyphens)
   const cleanTo = String(to).replace(/[^0-9]/g, '');
 
+  // Programmatic Zero-Emoji Guard on outbound text
+  const cleanText = stripEmojis(text);
+
   const url = `${baseUrl}/v2/whatsapp-business/messages`;
 
   const payload = {
     to: cleanTo,
     phoneNoId: String(phoneNoId),
     type: 'text',
-    text: text
+    text: cleanText
   };
 
   try {
@@ -63,6 +67,7 @@ async function sendWhatsAppImage(to, imageUrl, caption = '') {
   }
 
   const cleanTo = String(to).replace(/[^0-9]/g, '');
+  const cleanCaption = stripEmojis(caption);
   const url = `${baseUrl}/v2/whatsapp-business/messages`;
 
   const payload = {
@@ -70,7 +75,7 @@ async function sendWhatsAppImage(to, imageUrl, caption = '') {
     phoneNoId: String(phoneNoId),
     type: 'image',
     url: imageUrl,
-    caption: caption
+    caption: cleanCaption
   };
 
   try {

@@ -7,7 +7,7 @@ const { generateGeminiReply } = require('./gemini');
 const { sendWhatsAppMessage } = require('./whatsapp');
 const { pushLeadToNeoDove } = require('./neodove');
 const { scheduleFollowup, cancelFollowup, checkAndExecuteDueFollowups } = require('./followup');
-const { getISTTimeInfo, cleanHumanName } = require('./utils');
+const { getISTTimeInfo, cleanHumanName, stripEmojis } = require('./utils');
 
 const app = express();
 app.use(express.json());
@@ -84,9 +84,11 @@ app.get('/api/leads', (req, res) => {
       name: sess.leadData?.name || sess.leadData?.finbiteName || 'Unknown',
       stage: sess.leadData?.lead_stage || (sess.leadData?.preferred_call_time ? 'appointment_booked' : (sess.history.length > 2 ? 'discovery' : 'fresh_lead')),
       goal: sess.leadData?.goal || 'Weight Loss',
+      age: sess.leadData?.age || null,
       height: sess.leadData?.height || null,
       current_weight: sess.leadData?.current_weight || null,
       target_weight: sess.leadData?.target_weight || null,
+      start_timeline: sess.leadData?.start_timeline || null,
       medical_conditions: sess.leadData?.medical_conditions || null,
       call_time: sess.leadData?.preferred_call_time || null,
       is_paid_comfortable: sess.leadData?.is_paid_comfortable !== undefined ? sess.leadData?.is_paid_comfortable : null,
@@ -290,7 +292,7 @@ app.post('/webhook', async (req, res) => {
       const callTime = session.leadData.preferred_call_time || 'तय समय';
       console.log(`📞 [Call Already Booked] User ${senderPhone} replied "${incomingText}". Acknowledging confirmed appointment (${callTime}) without resetting funnel.`);
       
-      const confirmReply = `बहुत बढ़िया! आपकी 10-मिनट की कंसल्टेशन कॉल आज ${callTime} के लिए कन्फर्म है 🌱 हमारे सीनियर हेल्थ एक्सपर्ट आपसे ठीक समय पर बात करेंगे।`;
+      const confirmReply = `बहुत बढ़िया! आपकी 10-मिनट की कंसल्टेशन कॉल आज ${callTime} के लिए कन्फर्म है। हमारे सीनियर हेल्थ एक्सपर्ट आपसे ठीक समय पर बात करेंगे।`;
 
       session.history.push({ role: 'user', text: incomingText });
       session.history.push({ role: 'model', text: confirmReply });
@@ -302,11 +304,11 @@ app.post('/webhook', async (req, res) => {
     }
 
     // Fast-Path: ONLY when user clicks/types "YES" to the initial broadcast at Step 1 (NO call booked, NO vitals shared, NO active history)
-    const hasAlreadySharedVitals = Boolean(session.leadData?.current_weight || session.leadData?.height);
+    const hasAlreadySharedVitals = Boolean(session.leadData?.current_weight || session.leadData?.height || session.leadData?.age);
     const hasActiveHistory = Array.isArray(session.history) && session.history.length > 0;
 
     if ((normalizedInput === 'yes' || normalizedInput === 'haan') && !isCallAlreadyBooked && !hasAlreadySharedVitals && !hasActiveHistory) {
-      console.log(`⚡ [Fast-Path YES] Initial broadcast response asking for Height & Weight for ${senderPhone}...`);
+      console.log(`⚡ [Fast-Path YES] Initial broadcast response asking for Age, Weight & Height for ${senderPhone}...`);
       session.leadData = session.leadData || {};
       session.leadData.goal = 'Weight Loss';
       session.leadData.is_qualified = false;
@@ -316,9 +318,9 @@ app.post('/webhook', async (req, res) => {
 
       let fastReply;
       if (cleanName) {
-        fastReply = `Awesome ${cleanName}! We'd love to help you with your 15 kg weight-loss journey 🌱 To help our health coach prepare the right assessment, could you share your approximate height and current weight?`;
+        fastReply = `Hi ${cleanName}! I’m Aanya, the Assistant at Diet Dekho.\n\nहमारे सीनियर हेल्थ एक्सपर्ट्स की मदद से आपका 15 kg वेट-लॉस लक्ष्य आसानी से प्लान करने के लिए, बस ये 3 छोटी डिटेल्स बता दीजिए:\n\n1. आपकी उम्र (Age)?\n2. आपका वर्तमान वज़न (Weight in kg)?\n3. आपकी हाइट (Height in feet/inches या cm)?`;
       } else {
-        fastReply = `${istTime.greetingHindi}! We'd love to help you with your 15 kg weight-loss journey 🌱 To help our health coach prepare the right assessment, could you share your approximate height and current weight?`;
+        fastReply = `Hi! I’m Aanya, the Assistant at Diet Dekho.\n\nहमारे सीनियर हेल्थ एक्सपर्ट्स की मदद से आपका 15 kg वेट-लॉस लक्ष्य आसानी से प्लान करने के लिए, बस ये 3 छोटी डिटेल्स बता दीजिए:\n\n1. आपकी उम्र (Age)?\n2. आपका वर्तमान वज़न (Weight in kg)?\n3. आपकी हाइट (Height in feet/inches या cm)?`;
       }
 
       session.history.push({ role: 'user', text: incomingText });
@@ -335,7 +337,7 @@ app.post('/webhook', async (req, res) => {
           lead_stage: 'fresh_lead',
           lead_temperature: 'warm',
           is_qualified: false,
-          summary: 'Tapped YES on 15kg broadcast campaign - awaiting height/weight.'
+          summary: 'Tapped YES on 15kg broadcast campaign - awaiting age/weight/height.'
         }, senderPhone, false);
         session.leadData.alreadyCreatedInCrm = true;
       }
@@ -367,6 +369,20 @@ app.post('/webhook', async (req, res) => {
       console.log(`🚨 [Immediate Call Requested] User ${senderPhone} asked for immediate call. Set preferred_call_time to Immediately.`);
     }
 
+    // Deterministic Rejection / Unqualified Guard ("mehnga hai", "paid nahi chahiye", "free chahiye", "not interested", etc.)
+    const isRejectionOrUnqualified = /\b(mehnga|mehenga|expensive|budget nahi|budget issue|free chahiye|free me|free plan|paid nahi|nhi chahiye|nahi chahiye|not interested|nahi lena|nhi lena|paise nahi|afford nahi|no budget|fees nahi|charges nahi)\b/i.test(normalizedInput);
+    if (isRejectionOrUnqualified) {
+      session.leadData = session.leadData || {};
+      session.leadData.lead_stage = 'not_interested';
+      session.leadData.is_paid_comfortable = false;
+      session.leadData.is_qualified = false;
+      session.leadData.lead_temperature = 'cold';
+      session.followupPending = false;
+      session.followupDueAt = null;
+      cancelFollowup(senderPhone, session, saveSessionsToDisk);
+      console.log(`🛑 [Deterministic Rejection Match] User ${senderPhone} signaled rejection: "${incomingText}". Set stage to not_interested and permanently killed follow-up.`);
+    }
+
     // Call AI Engine with history, user message, and known lead memory
     const { replyText, leadData, interactionId } = await generateGeminiReply(
       session.history,
@@ -377,9 +393,12 @@ app.post('/webhook', async (req, res) => {
 
     if (interactionId) session.interactionId = interactionId;
 
+    // Strict Zero-Emoji Sanitization on outgoing model reply
+    const cleanReplyText = stripEmojis(replyText);
+
     // Update conversation history
     session.history.push({ role: 'user', text: incomingText });
-    session.history.push({ role: 'model', text: replyText });
+    session.history.push({ role: 'model', text: cleanReplyText });
 
     // Keep history manageable (last 20 messages)
     if (session.history.length > 20) {
@@ -389,8 +408,8 @@ app.post('/webhook', async (req, res) => {
     session.lastUpdated = new Date();
 
     // Send AI reply back to WhatsApp user
-    if (replyText) {
-      await sendWhatsAppMessage(senderPhone, replyText);
+    if (cleanReplyText) {
+      await sendWhatsAppMessage(senderPhone, cleanReplyText);
     }
 
     // Merge and persist lead data (never overwrite existing values with null/empty)
@@ -413,6 +432,17 @@ app.post('/webhook', async (req, res) => {
           session.leadData[key] = val;
         }
       }
+
+      // If AI extracted not_interested or is_paid_comfortable === false, enforce rejection state
+      if (leadData.lead_stage === 'not_interested' || leadData.is_paid_comfortable === false) {
+        session.leadData.lead_stage = 'not_interested';
+        session.leadData.is_paid_comfortable = false;
+        session.leadData.is_qualified = false;
+        session.leadData.lead_temperature = 'cold';
+        session.followupPending = false;
+        session.followupDueAt = null;
+        cancelFollowup(senderPhone, session, saveSessionsToDisk);
+      }
     }
 
     // 1. Fresh Lead Registration: Register on NeoDove on very first inbound contact
@@ -431,16 +461,21 @@ app.post('/webhook', async (req, res) => {
         session.leadData.alreadyCreatedInCrm = true;
       }
     } else {
-      // 2. Real-Time NeoDove CRM Sync: Update as soon as name, call time, or health stats arrive
+      // 2. Real-Time NeoDove CRM Sync: Update as soon as name, call time, health stats, or rejection arrive
       const hasConfirmedName = Boolean(session.leadData.confirmedNameInChat && leadData?.name);
       const hasCallTime = Boolean(session.leadData.preferred_call_time);
-      const hasStats = Boolean(leadData?.current_weight || leadData?.medical_conditions || leadData?.is_paid_comfortable !== undefined);
+      const hasStats = Boolean(leadData?.current_weight || leadData?.height || leadData?.age || leadData?.start_timeline || leadData?.medical_conditions || leadData?.is_paid_comfortable !== undefined);
+      const isRejectionSync = Boolean(session.leadData.is_paid_comfortable === false || session.leadData.lead_stage === 'not_interested');
 
-      if (hasConfirmedName || hasCallTime || hasStats) {
-        if (hasCallTime) {
+      if (hasConfirmedName || hasCallTime || hasStats || isRejectionSync) {
+        if (hasCallTime && session.leadData.is_paid_comfortable !== false && session.leadData.lead_stage !== 'not_interested') {
           session.leadData.lead_stage = 'appointment_booked';
           session.leadData.lead_temperature = 'hot';
           session.leadData.is_qualified = true;
+        } else if (session.leadData.is_paid_comfortable === false || session.leadData.lead_stage === 'not_interested') {
+          session.leadData.lead_stage = 'not_interested';
+          session.leadData.lead_temperature = 'cold';
+          session.leadData.is_qualified = false;
         } else if (session.leadData.is_paid_comfortable) {
           session.leadData.lead_stage = 'qualified';
           session.leadData.lead_temperature = 'hot';
@@ -454,8 +489,18 @@ app.post('/webhook', async (req, res) => {
     // Save session to disk immediately
     saveSessionsToDisk();
 
-    // Schedule smart 45-min follow-up (persisted to disk)
-    scheduleFollowup(senderPhone, session, saveSessionsToDisk);
+    // Schedule smart 45-min follow-up (persisted to disk) - ONLY if lead is NOT disqualified
+    const isUnqualified = ['opted_out', 'not_interested', 'unqualified', 'disqualified'].includes(session.leadData?.lead_stage) ||
+                          session.leadData?.is_paid_comfortable === false;
+
+    if (!isUnqualified) {
+      scheduleFollowup(senderPhone, session, saveSessionsToDisk);
+    } else {
+      session.followupPending = false;
+      session.followupDueAt = null;
+      saveSessionsToDisk();
+      console.log(`[Follow-up Skipped] ${senderPhone} is disqualified/not interested. No follow-up scheduled.`);
+    }
 
   } catch (error) {
     addDebugLog('Webhook Processing Error', error.message || String(error));
