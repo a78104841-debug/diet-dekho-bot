@@ -34,24 +34,72 @@ async function pushLeadToNeoDove(leadData = {}, phone, isUpdate = false) {
     displayName = leadData.finbiteName || `Lead ${String(mobileNum).slice(-4)}`;
   }
 
+  // Value preparation matching NeoDove exact CRM custom field types
+  const ageVal = leadData.age ? (parseInt(leadData.age, 10) || leadData.age) : null;
+  const weightVal = leadData.current_weight 
+    ? (parseFloat(String(leadData.current_weight).replace(/[^0-9.]/g, '')) || leadData.current_weight) 
+    : null;
+  const heightVal = leadData.height ? String(leadData.height) : null;
+  const medicalVal = leadData.medical_conditions || 'None';
+  const paidComfortable = leadData.is_paid_comfortable !== undefined ? Boolean(leadData.is_paid_comfortable) : null;
+  const bmiVal = leadData.bmi ? (parseFloat(leadData.bmi) || leadData.bmi) : null;
+  const timelineVal = leadData.start_timeline ? String(leadData.start_timeline) : null;
+  const callTimeVal = leadData.preferred_call_time || null;
+  const goalVal = leadData.goal || 'Weight Loss';
+  const isQualified = Boolean(leadData.is_qualified || leadData.preferred_call_time);
+
   const payload = {
     name: displayName,
     mobile: mobileNum,
     city: leadData.city || '',
     source: 'WhatsApp Assistant (Diet Dekho)',
-    goal: leadData.goal || 'Weight Loss',
-    age: leadData.age ? String(leadData.age) : '',
-    medical_conditions: leadData.medical_conditions || 'None',
-    height: leadData.height ? String(leadData.height) : '',
-    current_weight: leadData.current_weight ? String(leadData.current_weight) : '',
+    goal: goalVal,
+    "Goal": goalVal,
+
+    // Exact NeoDove Custom CRM Column mappings (Case-Sensitive & Special Characters)
+    "Age": ageVal,
+    age: ageVal,
+
+    "Weight": weightVal,
+    current_weight: weightVal,
+
+    "Height": heightVal,
+    height: heightVal,
+
+    "Medical Condition": medicalVal,
+    "Medical Conditions": medicalVal,
+    medical_conditions: medicalVal,
+
+    "Are you okay with Paid Plans?": paidComfortable,
+    is_paid_comfortable: paidComfortable,
+
+    "start_timeline": timelineVal,
+    "Start Timeline": timelineVal,
+
+    "bmi": bmiVal,
+    "BMI": bmiVal,
+
+    "preferred_call_time": callTimeVal,
+    "Preferred Call Time": callTimeVal,
+
+    "Target Weight": leadData.target_weight ? String(leadData.target_weight) : '',
     target_weight: leadData.target_weight ? String(leadData.target_weight) : '',
-    bmi: leadData.bmi ? String(leadData.bmi) : '',
-    start_timeline: leadData.start_timeline ? String(leadData.start_timeline) : '',
-    preferred_call_time: leadData.preferred_call_time || '',
-    is_paid_comfortable: leadData.is_paid_comfortable !== undefined ? leadData.is_paid_comfortable : null,
+
+    "City": leadData.city || '',
+    "Source": 'WhatsApp Assistant (Diet Dekho)',
+
+    "Lead Temperature": isFresh ? 'warm' : (leadData.lead_temperature || 'hot'),
     lead_temperature: isFresh ? 'warm' : (leadData.lead_temperature || 'hot'),
-    summary: leadData.summary || (isFresh ? 'Fresh WhatsApp broadcast reply - qualification in progress' : `Goal: ${leadData.goal || 'Weight Loss'}, Age: ${leadData.age || 'N/A'}, Start: ${leadData.start_timeline || 'N/A'}, Call: ${leadData.preferred_call_time || 'Pending'}, Paid: ${leadData.is_paid_comfortable ? 'Yes' : 'No'}`),
-    lead_stage: isFresh ? 'fresh_lead' : (leadData.lead_stage || (leadData.preferred_call_time ? 'appointment_booked' : 'qualified')),
+
+    "Lead Stage": isFresh ? 'fresh_lead' : (leadData.lead_stage || (callTimeVal ? 'appointment_booked' : 'qualified')),
+    lead_stage: isFresh ? 'fresh_lead' : (leadData.lead_stage || (callTimeVal ? 'appointment_booked' : 'qualified')),
+
+    "Is Qualified": isQualified,
+    is_qualified: isQualified,
+
+    "Summary": leadData.summary || (isFresh ? 'Fresh WhatsApp broadcast reply - qualification in progress' : `Goal: ${goalVal}, Age: ${ageVal || 'N/A'}, Weight: ${weightVal || 'N/A'}, Height: ${heightVal || 'N/A'}, Call: ${callTimeVal || 'Pending'}, Paid: ${paidComfortable ? 'Yes' : 'No'}`),
+    summary: leadData.summary || (isFresh ? 'Fresh WhatsApp broadcast reply - qualification in progress' : `Goal: ${goalVal}, Age: ${ageVal || 'N/A'}, Weight: ${weightVal || 'N/A'}, Height: ${heightVal || 'N/A'}, Call: ${callTimeVal || 'Pending'}, Paid: ${paidComfortable ? 'Yes' : 'No'}`),
+
     timestamp: new Date().toISOString()
   };
 

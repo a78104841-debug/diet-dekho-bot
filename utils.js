@@ -128,8 +128,73 @@ function stripEmojis(text) {
     .trim();
 }
 
+/**
+ * Generates dynamic, realistic consultation call slots based on current IST time.
+ * Calling hours: 10:00 AM to 06:30 PM IST.
+ * 
+ * Rules:
+ * - Every slot must be in the FUTURE (minimum 45-60 mins ahead).
+ * - Never offers a time that has already passed today (e.g. at 3:22 PM, never offer 3:00 PM).
+ * - If late afternoon (after 4:00 PM), offers today's evening slot and/or tomorrow morning.
+ * - If evening/night (after 5:45 PM), offers tomorrow's morning and afternoon slots.
+ * 
+ * @param {Date} [date=new Date()]
+ * @returns {{ slot1: string, slot2: string, slotTextHindi: string, slotTextEnglish: string, isNextDay: boolean }}
+ */
+function getSuggestedCallSlots(date = new Date()) {
+  const istOffset = 5.5 * 60 * 60 * 1000;
+  const istDate = new Date(date.getTime() + istOffset);
+  const hours = istDate.getUTCHours();
+  const minutes = istDate.getUTCMinutes();
+  const totalMinutes = hours * 60 + minutes;
+
+  let slot1 = '';
+  let slot2 = '';
+  let isNextDay = false;
+
+  // Case 1: Early Morning / Morning up to 11:30 AM (before 690 mins)
+  if (totalMinutes < 690) {
+    slot1 = 'आज दोपहर 1:00 PM';
+    slot2 = 'आज शाम 4:30 PM';
+  }
+  // Case 2: Midday 11:30 AM to 02:00 PM (690 to 839 mins)
+  else if (totalMinutes >= 690 && totalMinutes < 840) {
+    slot1 = 'आज दोपहर 3:00 PM';
+    slot2 = 'आज शाम 5:30 PM';
+  }
+  // Case 3: Afternoon 02:00 PM to 04:00 PM (840 to 959 mins) -> e.g. 3:22 PM!
+  else if (totalMinutes >= 840 && totalMinutes < 960) {
+    slot1 = 'आज शाम 4:45 PM';
+    slot2 = 'आज शाम 6:15 PM';
+  }
+  // Case 4: Late Afternoon 04:00 PM to 05:45 PM (960 to 1064 mins)
+  else if (totalMinutes >= 960 && totalMinutes < 1065) {
+    slot1 = 'आज शाम 6:30 PM';
+    slot2 = 'कल सुबह 11:30 AM';
+  }
+  // Case 5: Evening / Night (05:45 PM onwards - 1065+ mins) or midnight
+  else {
+    isNextDay = true;
+    slot1 = 'कल सुबह 11:30 AM';
+    slot2 = 'कल दोपहर 3:00 PM';
+  }
+
+  const slotTextHindi = `${slot1} का समय सही रहेगा या ${slot2} का?`;
+  const slotTextEnglish = `Would ${slot1} or ${slot2} work better for you?`;
+
+  return {
+    slot1,
+    slot2,
+    slotTextHindi,
+    slotTextEnglish,
+    isNextDay
+  };
+}
+
 module.exports = {
   getISTTimeInfo,
   cleanHumanName,
-  stripEmojis
+  stripEmojis,
+  getSuggestedCallSlots
 };
+

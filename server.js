@@ -369,6 +369,24 @@ app.post('/webhook', async (req, res) => {
       console.log(`🚨 [Immediate Call Requested] User ${senderPhone} asked for immediate call. Set preferred_call_time to Immediately.`);
     }
 
+    // Deterministic 10 Baje / Ambiguous Time Slot Guard:
+    // If previous bot message asked for call slot and user replies "10baje", "10 baje", "10:00", "10 am"
+    const isTenBajeRequest = /^(10\s*baje|10baje|10:00|10\s*am|10\s*pm|10)\b/i.test(normalizedInput);
+    const lastBotMessageForSlot = [...session.history].reverse().find(m => m.role === 'model')?.text || '';
+    const isSlotPromptPending = /समय सही रहेगा|slot|call.*time|time.*call|3:00|5:30|1:00|4:30|4:45|6:15|6:30|11:30|कॉल सेट कर सकते हैं|समय चुनें/i.test(lastBotMessageForSlot);
+
+    if (isTenBajeRequest && isSlotPromptPending) {
+      const istTime = getISTTimeInfo();
+      // If after 10:00 AM IST (totalMinutes >= 600), 10 AM today is past, so it means tomorrow morning 10:00 AM
+      const resolvedSlot = istTime.totalMinutes >= 600 ? 'कल सुबह 10:00 AM' : 'आज सुबह 10:00 AM';
+      session.leadData = session.leadData || {};
+      session.leadData.preferred_call_time = resolvedSlot;
+      session.leadData.lead_stage = 'appointment_booked';
+      session.leadData.lead_temperature = 'hot';
+      session.leadData.is_qualified = true;
+      console.log(`⏰ [Deterministic 10 Baje Match] User ${senderPhone} replied "${incomingText}". Assigned slot: ${resolvedSlot}`);
+    }
+
     // Deterministic Rejection / Unqualified Guard ("mehnga hai", "paid nahi chahiye", "free chahiye", "not interested", etc.)
     const isRejectionOrUnqualified = /\b(mehnga|mehenga|expensive|budget nahi|budget issue|free chahiye|free me|free plan|paid nahi|nhi chahiye|nahi chahiye|not interested|nahi lena|nhi lena|paise nahi|afford nahi|no budget|fees nahi|charges nahi)\b/i.test(normalizedInput);
     if (isRejectionOrUnqualified) {
