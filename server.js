@@ -7,7 +7,7 @@ const { generateGeminiReply } = require('./gemini');
 const { sendWhatsAppMessage } = require('./whatsapp');
 const { pushLeadToNeoDove } = require('./neodove');
 const { scheduleFollowup, cancelFollowup, checkAndExecuteDueFollowups } = require('./followup');
-const { getISTTimeInfo, cleanHumanName, stripEmojis } = require('./utils');
+const { getISTTimeInfo, cleanHumanName, stripEmojis, getSuggestedCallSlots } = require('./utils');
 
 const app = express();
 app.use(express.json());
@@ -401,6 +401,30 @@ app.post('/webhook', async (req, res) => {
       console.log(`🛑 [Deterministic Rejection Match] User ${senderPhone} signaled rejection: "${incomingText}". Set stage to not_interested and permanently killed follow-up.`);
     }
 
+    // Deterministic Payment Intent Guard:
+    // When customer asks about payment, UPI, bank transfer, payment link, or wants to pay now
+    const isPaymentQuery = /\b(payment|pay|upi|gpay|phonepe|paytm|bank transfer|account number|scanner|qr code|kahan pay|kaise pay|bhejo link|payment link|paise kaise du|fees kaise du|bhugtan|kisko bheju|bhejo upi)\b/i.test(normalizedInput);
+    if (isPaymentQuery) {
+      console.log(`💳 [Deterministic Payment Guard] User ${senderPhone} asked about payment: "${incomingText}". Enforcing counselor payment policy.`);
+      const callTime = session.leadData?.preferred_call_time;
+      let paymentReply;
+      if (callTime) {
+        paymentReply = `डाइट देखो में भुगतान (Payment) की आधिकारिक प्रक्रिया और पेमेंट लिंक हमारे सीनियर हेल्थ काउंसलर 10-मिनट की कंसल्टेशन कॉल पर ही सुरक्षित रूप से साझा करते हैं।\n\nआपकी कॉल ${callTime} के लिए शेड्यूल्ड है, उसी समय काउंसलर आपको प्लान फाइनल करके आधिकारिक पेमेंट लिंक प्रदान करेंगे।`;
+      } else {
+        const slotInfo = getSuggestedCallSlots();
+        paymentReply = `डाइट देखो में भुगतान (Payment) की आधिकारिक प्रक्रिया और पेमेंट लिंक हमारे सीनियर हेल्थ काउंसलर 10-मिनट की कंसल्टेशन कॉल पर आपकी ज़रूरत समझने के बाद ही सुरक्षित रूप से साझा करते हैं।\n\n${slotInfo.slotTextHindi}`;
+      }
+
+      const cleanReply = stripEmojis(paymentReply);
+      session.history.push({ role: 'user', text: incomingText });
+      session.history.push({ role: 'model', text: cleanReply });
+      session.lastUpdated = new Date();
+
+      await sendWhatsAppMessage(senderPhone, cleanReply);
+      saveSessionsToDisk();
+      return;
+    }
+
     // Call AI Engine with history, user message, and known lead memory
     const { replyText, leadData, interactionId } = await generateGeminiReply(
       session.history,
@@ -412,7 +436,21 @@ app.post('/webhook', async (req, res) => {
     if (interactionId) session.interactionId = interactionId;
 
     // Strict Zero-Emoji Sanitization on outgoing model reply
-    const cleanReplyText = stripEmojis(replyText);
+    let cleanReplyText = stripEmojis(replyText);
+
+    // Unbreakable Post-Generation Payment Safety Filter:
+    // If AI ever hallucinates asking customer for their UPI ID, bank transfer details, or payment link
+    const forbiddenPaymentPhrases = [
+      'अपना upi', 'apna upi', 'bank transfer विवरण', 'बैंक ट्रांसफर',
+      'payment link चाहते हैं', 'upi id bhejo', 'upi id', 'भुगतान प्रक्रिया तुरंत शुरू'
+    ];
+    if (forbiddenPaymentPhrases.some(phrase => cleanReplyText.toLowerCase().includes(phrase))) {
+      console.warn(`⚠️ [Payment Hallucination Filter Triggered] AI asked customer for UPI/bank details. Neutralizing.`);
+      const callTime = session.leadData?.preferred_call_time;
+      cleanReplyText = callTime
+        ? `डाइट देखो में भुगतान (Payment) की आधिकारिक प्रक्रिया और पेमेंट लिंक हमारे सीनियर हेल्थ काउंसलर 10-मिनट की कंसल्टेशन कॉल पर ही सुरक्षित रूप से साझा करते हैं। आपकी कॉल ${callTime} के लिए शेड्यूल्ड है, उसी समय काउंसलर आपको आधिकारिक लिंक प्रदान करेंगे।`
+        : `डाइट देखो में भुगतान (Payment) की आधिकारिक प्रक्रिया और पेमेंट लिंक हमारे सीनियर हेल्थ काउंसलर 10-मिनट की कंसल्टेशन कॉल पर ही सुरक्षित रूप से साझा करते हैं। क्या आज का समय सही रहेगा?`;
+    }
 
     // Update conversation history
     session.history.push({ role: 'user', text: incomingText });
