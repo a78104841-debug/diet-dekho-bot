@@ -349,11 +349,11 @@ function handleDeterministicFallback(session, incomingText) {
     }
 
     if (isEnglish) {
-      replyText = `Got it! Your details have been noted.\n\nTo help our team understand your metabolism—do you have any medical condition like Thyroid, PCOD, Diabetes, BP, or any acidity/bloating issues?`;
+      replyText = `Got it! Your details have been noted.\n\nHere is how Diet Dekho will help you achieve your weight loss naturally:\n1. 100% Homemade Food: Strictly zero supplements, zero protein powders, and no crash dieting.\n2. Hospital-Certified Clinical Dietitians: Dedicated 1-on-1 expert with hospital experience who works on your root cause.\n3. Metabolism-Boosting Diet: We fix your metabolism so the food you eat converts into energy, not fat.\n4. Daily Live Yoga & Cardio (45 mins): Free live classes to tone your body and prevent loose/shaggy skin.\n\nTo personalize your routine—do you have any medical condition like Thyroid, PCOD, Diabetes, BP, or any acidity/bloating issues?`;
     } else if (isHinglish) {
-      replyText = `Details note kar li gayi hain!\n\nAapki body aur metabolism ko samajhne ke liye—kya aapko Thyroid, PCOD, Sugar (Diabetes), BP, ya acidity/bloating jaisi koi medical problem hai?`;
+      replyText = `Details note kar li gayi hain!\n\nDiet Dekho aapka weight loss in 4 core pillars se naturally karwata hai:\n1. 100% Ghar Ka Khana: Strictly zero supplements, zero protein powder, zero medicines.\n2. Hospital-Experienced Clinical Dietitians: Dedicated 1-on-1 expert jo root cause par kaam karti hain.\n3. Metabolism-Boosting: Aapka metabolism boost kiya jata hai taaki khana fat nahi, energy bane.\n4. Daily Live Yoga & Cardio (45 mins): Skin tight aur tone rakhne ke liye free live sessions.\n\nAapki body ko sahi se samajhne ke liye—kya aapko Thyroid, PCOD, Sugar (Diabetes), BP, ya acidity/bloating jaisi koi medical problem hai?`;
     } else {
-      replyText = `नमस्ते! आपकी डिटेल्स नोट कर ली गई हैं।\n\nआपकी बॉडी को पूरी तरह समझने के लिए—क्या आपको थायरॉइड, PCOD, शुगर (Diabetes), BP या एसिडिटी/ब्लोटिंग जैसी कोई मेडिकल समस्या है?`;
+      replyText = `डिटेल्स नोट कर ली गईं!\n\nडाइट देखो आपके इस वेट-लॉस लक्ष्य को इन 4 मुख्य तरीकों से सुरक्षित पूरा कराता है:\n1. 100% घर का सादा खाना: हमारे यहाँ कोई भी सप्लीमेंट, प्रोटीन पाउडर या दवाई नहीं दी जाती।\n2. हॉस्पिटल-अनुभवी क्लीनिकल डाइटिशियन: आपके लिए डेडिकेटेड डाइटिशियन जो आपकी मेडिकल हिस्ट्री और रूट कॉज पर काम करेंगी।\n3. मेटाबॉलिज्म बूस्टिंग: आपकी बॉडी का मेटाबॉलिज्म सुधारा जाता है ताकि खाया हुआ खाना फैट में नहीं, बल्कि एनर्जी में बदले।\n4. डेली लाइव योगा व कार्डियो (45 मिनट): वज़न घटने के बाद स्किन ढीली न पड़े, इसके लिए फ्री लाइव योगा और कार्डियो सेशंस।\n\nआपकी बॉडी को पूरी तरह समझने के लिए—क्या आपको थायरॉइड, PCOD, शुगर (Diabetes), BP या एसिडिटी/ब्लोटिंग जैसी कोई मेडिकल समस्या है?`;
     }
 
     return {

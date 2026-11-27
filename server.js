@@ -286,19 +286,107 @@ app.post('/webhook', async (req, res) => {
       (session.leadData?.preferred_call_time && String(session.leadData.preferred_call_time).trim() !== '') ||
       session.leadData?.lead_stage === 'appointment_booked'
     );
-    const affirmativeKeywords = ['yes', 'haan', 'ha', 'ok', 'okay', 'sure', 'theek hai', 'done', 'yes mam', 'yes sir', 'shukriya', 'thanks', 'thank you', 'bilkul', 'ji'];
 
-    if (isCallAlreadyBooked && affirmativeKeywords.includes(normalizedInput)) {
-      const callTime = session.leadData.preferred_call_time || 'तय समय';
-      console.log(`📞 [Call Already Booked] User ${senderPhone} replied "${incomingText}". Acknowledging confirmed appointment (${callTime}) without resetting funnel.`);
+    // Missed Call / Telecaller SLA Complaint Guard:
+    // If user complains about not receiving a call ("Mujhe call nahi aya", "call nahi kiya", "nobody called", etc.)
+    const missedCallPatterns = /call nahi (aaya|aya|aayi|ayi|kiya|kia|lagi|mili)|phone nahi (aaya|aya|kiya|kia)|kisi ne call nahi|nobody called|call nahi hua|call nahi mila|waiting for call|call kyu nahi (aaya|aya|kiya)|call nhi aaya/i;
+    const isMissedCallComplaint = missedCallPatterns.test(incomingText) || 
+      (isCallAlreadyBooked && (normalizedInput === '1baje' || normalizedInput === '1 baje' || normalizedInput === 'call'));
+
+    if (isMissedCallComplaint) {
+      console.log(`🚨 [MISSED CALL COMPLAINT] User ${senderPhone} complained: "${incomingText}". Triggering priority apology and escalation.`);
       
-      const confirmReply = `बहुत बढ़िया! आपकी 10-मिनट की कंसल्टेशन कॉल आज ${callTime} के लिए कन्फर्म है। हमारे सीनियर हेल्थ एक्सपर्ट आपसे ठीक समय पर बात करेंगे।`;
+      const clientName = session.leadData?.name ? `${session.leadData.name} जी` : 'जी';
+      const apologyReply = `नमस्ते ${clientName}! समय पर कॉल न पहुँच पाने के लिए हम दिल से माफ़ी चाहते हैं। हमारी कॉलिंग टीम में तकनीकी समस्या के कारण यह देरी हुई।\n\nमैंने आपकी प्रोफ़ाइल को हमारे सीनियर हेल्थ एक्सपर्ट के पास 'अर्जेंट प्रायोरिटी' पर भेज दिया है। क्या अगले 10 मिनट में आपसे बात करना संभव होगा, या आप कोई दूसरा समय पसंद करेंगे?`;
 
+      session.leadData.lead_stage = 'urgent_callback';
+      session.leadData.lead_temperature = 'hot';
       session.history.push({ role: 'user', text: incomingText });
-      session.history.push({ role: 'model', text: confirmReply });
+      session.history.push({ role: 'model', text: apologyReply });
       session.lastUpdated = new Date();
 
-      await sendWhatsAppMessage(senderPhone, confirmReply);
+      await sendWhatsAppMessage(senderPhone, apologyReply);
+      await pushLeadToNeoDove({
+        ...session.leadData,
+        lead_stage: 'urgent_callback',
+        lead_temperature: 'hot',
+        summary: `URGENT: Customer complained on WhatsApp: "${incomingText}". Missed scheduled call. Immediate callback required.`
+      }, senderPhone, true);
+
+      saveSessionsToDisk();
+      return;
+    }
+
+    // "Tum AI ho kya" / Bot Detection Guard:
+    const isAiQuery = /tum ai ho|are you (an )?ai|bot ho ky[aq]|robot ho ky[aq]|machine ho ky[aq]|ai ho ky[aq]/i.test(incomingText);
+    if (isAiQuery) {
+      console.log(`🤖 [AI Query Guard] User ${senderPhone} asked "${incomingText}". Responding with human assistant empathy.`);
+      const clientName = session.leadData?.name ? `${session.leadData.name} जी` : 'जी';
+      const aiReply = `जी ${clientName}, मैं डाइट देखो की डिजिटल असिस्टेंट आन्या हूँ। आपकी डाइट और पूरा मील प्लान हमारे हॉस्पिटल-अनुभवी सीनियर क्लीनिकल डाइटिशियंस ही बनाते हैं। आपसे हुई किसी भी असुविधा के लिए मैं माफ़ी चाहती हूँ। क्या मैं सीधे हमारे सीनियर हेल्थ एक्सपर्ट को बोलूँ कि वे आपसे अभी कॉल पर बात करें?`;
+
+      session.history.push({ role: 'user', text: incomingText });
+      session.history.push({ role: 'model', text: aiReply });
+      session.lastUpdated = new Date();
+
+      await sendWhatsAppMessage(senderPhone, aiReply);
+      saveSessionsToDisk();
+      return;
+    }
+
+    // Call Booked Guard: Once call is booked, NEVER restart discovery or ask for vitals again!
+    if (isCallAlreadyBooked) {
+      // A. Check for Cancellation / Rejection
+      const isRejectionOrCancel = /\b(not interested|cancel|nahi chahiye|nhi chahiye|mat karna|rehnedo|rehne do)\b/i.test(normalizedInput);
+      if (isRejectionOrCancel) {
+        session.leadData.lead_stage = 'not_interested';
+        session.leadData.is_paid_comfortable = false;
+        session.followupPending = false;
+        session.followupDueAt = null;
+        const cancelReply = `ठीक है, कोई बात नहीं! हमने आपकी कॉल रिक्वेस्ट कैंसिल कर दी है। भविष्य में कभी भी स्वस्थ घर के खाने से वेट लॉस के लिए आप हमें संपर्क कर सकते हैं।`;
+        session.history.push({ role: 'user', text: incomingText });
+        session.history.push({ role: 'model', text: cancelReply });
+        session.lastUpdated = new Date();
+        await sendWhatsAppMessage(senderPhone, cancelReply);
+        await pushLeadToNeoDove(session.leadData, senderPhone, true);
+        saveSessionsToDisk();
+        return;
+      }
+
+      // B. Check for Reschedule Request
+      const isReschedule = /change|badal|dusra time|reschedule|koi aur time|dusre time|agli baar|agle din/i.test(normalizedInput);
+      const slotMatch = normalizedInput.match(/(\d{1,2}(?::\d{2})?\s*(?:am|pm|baje)?|subah|dopahar|shaam|kal|aaj)/i);
+      if (isReschedule && slotMatch) {
+        const newSlot = slotMatch[0];
+        session.leadData.preferred_call_time = newSlot;
+        const rescheduleReply = `ज़रूर! मैंने आपकी कॉल का समय बदलकर ${newSlot} कर दिया है। हमारे सीनियर हेल्थ एक्सपर्ट आपसे इसी समय पर बात करेंगे।`;
+        session.history.push({ role: 'user', text: incomingText });
+        session.history.push({ role: 'model', text: rescheduleReply });
+        session.lastUpdated = new Date();
+        await sendWhatsAppMessage(senderPhone, rescheduleReply);
+        await pushLeadToNeoDove(session.leadData, senderPhone, true);
+        saveSessionsToDisk();
+        return;
+      }
+
+      // C. For ANY other message from a customer with a booked call (e.g. "ok", "haan", "kab call aayega", "waiting", "hello", etc.):
+      // Reassure them of the booked slot, NEVER restart discovery, and NEVER ask for vitals/details!
+      const callTime = session.leadData.preferred_call_time || 'तय समय';
+      const clientName = session.leadData?.name ? `${session.leadData.name} जी` : 'जी';
+      console.log(`📞 [Call Already Booked Reassurance] User ${senderPhone} sent: "${incomingText}". Reassuring confirmed appointment (${callTime}) without restarting funnel.`);
+
+      let bookedReassuranceReply;
+      const affirmativeKeywords = ['yes', 'haan', 'ha', 'ok', 'okay', 'sure', 'theek hai', 'done', 'yes mam', 'yes sir', 'shukriya', 'thanks', 'thank you', 'bilkul', 'ji'];
+      if (affirmativeKeywords.includes(normalizedInput)) {
+        bookedReassuranceReply = `बहुत बढ़िया! आपकी 10-मिनट की कंसल्टेशन कॉल ${callTime} के लिए कन्फर्म है। हमारे सीनियर हेल्थ एक्सपर्ट आपसे ठीक समय पर बात करेंगे।`;
+      } else {
+        bookedReassuranceReply = `नमस्ते ${clientName}! आपकी 10-मिनट की कस्टमाइज़्ड कंसल्टेशन कॉल ${callTime} के लिए शेड्यूल्ड है। हमारे सीनियर हेल्थ एक्सपर्ट आपसे ठीक समय पर सीधे फ़ोन पर बात करेंगे। यदि आप समय बदलना चाहते हैं, तो कृपया नया समय बता दें।`;
+      }
+
+      session.history.push({ role: 'user', text: incomingText });
+      session.history.push({ role: 'model', text: bookedReassuranceReply });
+      session.lastUpdated = new Date();
+
+      await sendWhatsAppMessage(senderPhone, bookedReassuranceReply);
       saveSessionsToDisk();
       return;
     }
@@ -318,9 +406,9 @@ app.post('/webhook', async (req, res) => {
 
       let fastReply;
       if (cleanName) {
-        fastReply = `Hi ${cleanName}! I am Aanya, Assistant at Diet Dekho.\n\nTo help our Senior Health Coach customize your natural weight loss assessment, please share these 3 quick details:\n\n1. Your Age?\n2. Your Current Weight (in kg)?\n3. Your Height (in feet/inches or cm)?`;
+        fastReply = `Hi ${cleanName}! I am Aanya, Assistant at Diet Dekho.\n\nWe help you lose weight 100% naturally with homemade kitchen food—strictly zero supplements, zero protein powders, and zero starvation.\n\nTo help our Senior Health Coach customize your personal assessment, please share these 3 quick details:\n\n1. Your Age?\n2. Your Current Weight (in kg)?\n3. Your Height (in feet/inches or cm)?`;
       } else {
-        fastReply = `Hi! I am Aanya, Assistant at Diet Dekho.\n\nTo help our Senior Health Coach customize your natural weight loss assessment, please share these 3 quick details:\n\n1. Your Age?\n2. Your Current Weight (in kg)?\n3. Your Height (in feet/inches or cm)?`;
+        fastReply = `Hi! I am Aanya, Assistant at Diet Dekho.\n\nWe help you lose weight 100% naturally with homemade kitchen food—strictly zero supplements, zero protein powders, and zero starvation.\n\nTo help our Senior Health Coach customize your personal assessment, please share these 3 quick details:\n\n1. Your Age?\n2. Your Current Weight (in kg)?\n3. Your Height (in feet/inches or cm)?`;
       }
 
       session.history.push({ role: 'user', text: incomingText });
