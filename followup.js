@@ -178,10 +178,10 @@ Keep it natural, friendly Hindi/Hinglish, zero emojis, strictly 2 lines.]`;
           followUpInstruction = `[CRITICAL SYSTEM DIRECTIVE:
 The prospect shared details or paused during appointment scheduling.
 Write a warm, respectful 2-line WhatsApp reminder from Diet Dekho:
-"नमस्ते ${salutation}! हमारे सीनियर क्लीनिकल न्यूट्रिशनिस्ट के साथ आपकी 10-मिनट की फ्री डाइट असेसमेंट कॉल का स्लॉट रिज़र्व है। क्या आज दोपहर या शाम में 10 मिनट बात करना संभव होगा?"
+"नमस्ते ${salutation}! हमारे सीनियर हेल्थ कोच के साथ आपकी 10-मिनट की फ्री डाइट असेसमेंट कॉल का स्लॉट रिज़र्व है। क्या आज दोपहर या शाम में 10 मिनट बात करना संभव होगा?"
 Keep it natural, zero emojis, strictly under 2 lines.]`;
 
-          fallbackText = `नमस्ते ${salutation}! हमारे सीनियर क्लीनिकल न्यूट्रिशनिस्ट के साथ आपकी 10-मिनट की फ्री डाइट असेसमेंट कॉल का स्लॉट रिज़र्व है। क्या आज दोपहर या शाम में 10 मिनट बात करना संभव होगा?`;
+          fallbackText = `नमस्ते ${salutation}! हमारे सीनियर हेल्थ कोच के साथ आपकी 10-मिनट की फ्री डाइट असेसमेंट कॉल का स्लॉट रिज़र्व है। क्या आज दोपहर या शाम में 10 मिनट बात करना संभव होगा?`;
         }
 
         let outboundText = '';

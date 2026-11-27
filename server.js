@@ -318,9 +318,9 @@ app.post('/webhook', async (req, res) => {
 
       let fastReply;
       if (cleanName) {
-        fastReply = `Hi ${cleanName}! I’m Aanya, the Assistant at Diet Dekho.\n\nहमारे सीनियर हेल्थ एक्सपर्ट्स की मदद से आपका 15 kg वेट-लॉस लक्ष्य आसानी से प्लान करने के लिए, बस ये 3 छोटी डिटेल्स बता दीजिए:\n\n1. आपकी उम्र (Age)?\n2. आपका वर्तमान वज़न (Weight in kg)?\n3. आपकी हाइट (Height in feet/inches या cm)?`;
+        fastReply = `Hi ${cleanName}! I am Aanya, Assistant at Diet Dekho.\n\nTo help our Senior Health Coach customize your natural weight loss assessment, please share these 3 quick details:\n\n1. Your Age?\n2. Your Current Weight (in kg)?\n3. Your Height (in feet/inches or cm)?`;
       } else {
-        fastReply = `Hi! I’m Aanya, the Assistant at Diet Dekho.\n\nहमारे सीनियर हेल्थ एक्सपर्ट्स की मदद से आपका 15 kg वेट-लॉस लक्ष्य आसानी से प्लान करने के लिए, बस ये 3 छोटी डिटेल्स बता दीजिए:\n\n1. आपकी उम्र (Age)?\n2. आपका वर्तमान वज़न (Weight in kg)?\n3. आपकी हाइट (Height in feet/inches या cm)?`;
+        fastReply = `Hi! I am Aanya, Assistant at Diet Dekho.\n\nTo help our Senior Health Coach customize your natural weight loss assessment, please share these 3 quick details:\n\n1. Your Age?\n2. Your Current Weight (in kg)?\n3. Your Height (in feet/inches or cm)?`;
       }
 
       session.history.push({ role: 'user', text: incomingText });

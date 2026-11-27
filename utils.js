@@ -299,6 +299,7 @@ function extractVitalsDeterministically(text) {
 /**
  * Generates an infallible deterministic reply when AI models encounter rate limits or timeouts.
  * Guarantees zero dropped messages and zero silence for customers on WhatsApp.
+ * Supports strict language mirroring (Devanagari, Hinglish, English) and pure value call booking (zero price push).
  * 
  * @param {object} session 
  * @param {string} incomingText 
@@ -309,7 +310,17 @@ function handleDeterministicFallback(session, incomingText) {
   const leadData = session.leadData || {};
   let replyText = '';
 
-  // 1. Check if user sent vitals
+  // Language Detection
+  const hasDevanagari = /[\u0900-\u097F]/.test(incomingText || '');
+  const hasHinglish = /\b(haan|nahi|nhi|theek|baje|subah|shaam|dopahar|mera|meri|mujhe|hai|hain|kuch|pet|chabi|wazan|vajan|saal|aaj|kal|turant)\b/i.test(normalized);
+  const isHindi = hasDevanagari;
+  const isHinglish = !hasDevanagari && hasHinglish;
+  const isEnglish = !isHindi && !isHinglish;
+
+  const slotInfo = getSuggestedCallSlots();
+  const selectedSlotText = isEnglish ? slotInfo.slotTextEnglish : slotInfo.slotTextHindi;
+
+  // 1. Check if user sent vitals (Age, Weight, Height)
   const vitals = extractVitalsDeterministically(incomingText);
   if (vitals && (vitals.weight || vitals.height || vitals.age)) {
     if (vitals.age) leadData.age = vitals.age;
@@ -337,13 +348,13 @@ function handleDeterministicFallback(session, incomingText) {
       leadData.target_weight = `${idealWeight} kg`;
     }
 
-    const vitalsParts = [];
-    if (leadData.age) vitalsParts.push(`उम्र: ${leadData.age}`);
-    if (leadData.current_weight) vitalsParts.push(`वज़न: ${leadData.current_weight}`);
-    if (leadData.height) vitalsParts.push(`हाइट: ${leadData.height}`);
-    const summaryStr = vitalsParts.length > 0 ? ` (${vitalsParts.join(', ')})` : '';
-
-    replyText = `नमस्ते! आपकी डिटेल्स${summaryStr} नोट कर ली गई हैं।\n\nआपकी बॉडी को पूरी तरह समझने के लिए—क्या आपको थायरॉइड, PCOD, शुगर (Diabetes), BP या एसिडिटी जैसी कोई मेडिकल समस्या है?`;
+    if (isEnglish) {
+      replyText = `Got it! Your details have been noted.\n\nTo help our team understand your metabolism—do you have any medical condition like Thyroid, PCOD, Diabetes, BP, or any acidity/bloating issues?`;
+    } else if (isHinglish) {
+      replyText = `Details note kar li gayi hain!\n\nAapki body aur metabolism ko samajhne ke liye—kya aapko Thyroid, PCOD, Sugar (Diabetes), BP, ya acidity/bloating jaisi koi medical problem hai?`;
+    } else {
+      replyText = `नमस्ते! आपकी डिटेल्स नोट कर ली गई हैं।\n\nआपकी बॉडी को पूरी तरह समझने के लिए—क्या आपको थायरॉइड, PCOD, शुगर (Diabetes), BP या एसिडिटी/ब्लोटिंग जैसी कोई मेडिकल समस्या है?`;
+    }
 
     return {
       replyText: stripEmojis(replyText),
@@ -351,33 +362,26 @@ function handleDeterministicFallback(session, incomingText) {
     };
   }
 
-  // 2. Check if user is answering medical conditions
+  // 2. Check if user is answering medical conditions -> Pitch 10-Min Call with Script USPs (NO PRICE)
   const lastBotMsg = [...(session.history || [])].reverse().find(m => m.role === 'model')?.text || '';
-  const isWaitingMedical = /medical|थायरॉइड|pcod|शुगर|diabetes|bp|एसिडिटी|समस्या/i.test(lastBotMsg);
+  const isWaitingMedical = /medical|थायरॉइड|pcod|शुगर|diabetes|bp|एसिडिटी|bloating|problem|समस्या/i.test(lastBotMsg);
   if (isWaitingMedical && !leadData.medical_conditions) {
     if (/^(no|nahi|none|fit|nhi|kuch nahi|sab theek|na|nothing|normal)$/i.test(normalized)) {
       leadData.medical_conditions = 'None';
-      replyText = `नोट कर लिया!\n\nएक बात और जानना चाहूँगी:\n\nआप अपना Diet Plan कब से शुरू करना चाहेंगे?\n\n1. आज या कल से\n2. अगले 2–3 दिनों में\n3. अगले सप्ताह से\n4. फिलहाल सिर्फ जानकारी ले रहा/रही हूँ`;
     } else {
       leadData.medical_conditions = incomingText.trim();
-      replyText = `नोट कर लिया। इस स्थिति में घर का सही खान-पान और सही पोषण बहुत मायने रखता है।\n\nआप अपना Diet Plan कब से शुरू करना चाहेंगे?\n\n1. आज या कल से\n2. अगले 2–3 दिनों में\n3. अगले सप्ताह से\n4. फिलहाल सिर्फ जानकारी ले रहा/रही हूँ`;
     }
-    return {
-      replyText: stripEmojis(replyText),
-      leadData
-    };
-  }
 
-  // 3. Check if user is answering timeline
-  const isWaitingTimeline = /कब से शुरू|शुरू करना चाहेंगे|timeline/i.test(lastBotMsg);
-  if (isWaitingTimeline && !leadData.start_timeline) {
-    if (/^(1|aaj|kal|today|tomorrow|तुरंत)/i.test(normalized)) leadData.start_timeline = 'Today/Tomorrow';
-    else if (/^(2|2-3|दो तीन)/i.test(normalized)) leadData.start_timeline = 'In 2-3 days';
-    else if (/^(3|next week|अगले हफ्ते|अगले सप्ताह)/i.test(normalized)) leadData.start_timeline = 'Next week';
-    else leadData.start_timeline = 'Info only';
+    const cleanName = leadData.name ? cleanHumanName(leadData.name) : null;
+    const nameStr = cleanName ? (isEnglish ? cleanName : `${cleanName} जी`) : (isEnglish ? '' : 'जी');
 
-    const slotInfo = getSuggestedCallSlots();
-    replyText = `नोट कर लिया! हमारा कस्टमाइज़्ड होम-कुक्ड डाइट प्रोग्राम मिनिमम सिर्फ ₹49/दिन से शुरू होता है।\n\nहमारे सीनियर क्लीनिकल न्यूट्रिशनिस्ट से 10-मिनट की क्विक कॉल पर पूरा डाइट असेसमेंट समझने के लिए कौन सा समय सही रहेगा:\n\n1. ${slotInfo.slot1}\n2. ${slotInfo.slot2}\n\n(या आप अपनी सुविधा का कोई भी समय बता सकते हैं)`;
+    if (isEnglish) {
+      replyText = `Got it ${cleanName || ''}! Our Senior Health Coach will do a 10-minute free personalized assessment call with you.\n\nOn this 10-minute call, the Health Coach will guide you on:\n1. The root cause of your metabolism.\n2. How our clinical dietitian will help you achieve your goal with 100% homemade food (strictly no supplements, no protein powders, no starvation).\n3. Free daily live Yoga & Cardio sessions included for body toning.\n\nWhich time window works best for you today:\n1. ${slotInfo.slot1}\n2. ${slotInfo.slot2}\n(Or feel free to share any preferred time)`;
+    } else if (isHinglish) {
+      replyText = `Note kar liya ${nameStr}! Hamare Senior Health Coach aapke sath 10-minute ki free assessment call karenge.\n\nIs 10-minute call par Health Coach aapko guide karenge:\n1. Aapke metabolism aur weight gain ka root cause.\n2. Hamari hospital-certified clinical dietitian 100% ghar ke khane se aapka weight kaise kam karwayengi (strictly zero supplements, zero protein powder, no starvation).\n3. Body toning ke liye daily free live Yoga & Cardio sessions.\n\nIske liye aaj kaun sa time window aapke liye best rahega:\n1. ${slotInfo.slot1}\n2. ${slotInfo.slot2}\n(Ya aap apni pasand ka koi bhi time bata sakte hain)`;
+    } else {
+      replyText = `नोट कर लिया ${nameStr}! हमारे सीनियर हेल्थ कोच आपके साथ 10-मिनट की फ्री असेसमेंट कॉल करेंगे।\n\nइस 10-मिनट की कॉल पर हेल्थ कोच आपको समझाएंगे:\n1. आपके मेटाबॉलिज्म और वज़न का असली कारण (Root Cause)।\n2. हमारी क्लीनिकल डाइटिशियन 100% घर के सादे खाने से आपका वज़न कैसे कम कराएंगी (बिना किसी सप्लीमेंट या प्रोटीन पाउडर के)।\n3. बॉडी टोनिंग के लिए रोज़ाना फ्री लाइव योगा व कार्डियो सेशंस।\n\nइसके लिए आज का कौन सा समय आपके लिए सबसे सुविधाजनक रहेगा:\n1. ${slotInfo.slot1}\n2. ${slotInfo.slot2}\n(या आप अपनी पसंद का कोई भी समय बता सकते हैं)`;
+    }
 
     return {
       replyText: stripEmojis(replyText),
@@ -385,19 +389,18 @@ function handleDeterministicFallback(session, incomingText) {
     };
   }
 
-  // 4. Check if user is selecting call time
-  const isWaitingCall = /समय सही रहेगा|slot|call.*time|क्विक कॉल|10-मिनट/i.test(lastBotMsg);
+  // 3. Check if user is selecting call time
+  const isWaitingCall = /समय सही रहेगा|slot|call.*time|time window|क्विक कॉल|10-मिनट|10-minute/i.test(lastBotMsg);
   if (isWaitingCall && !leadData.preferred_call_time) {
-    const slotInfo = getSuggestedCallSlots();
     let bookedSlot = null;
     if (normalized === '1' || normalized.includes('पहला') || normalized.includes('1st')) {
       bookedSlot = slotInfo.slot1;
     } else if (normalized === '2' || normalized.includes('दूसरा') || normalized.includes('2nd')) {
       bookedSlot = slotInfo.slot2;
     } else if (normalized.includes('10 baje') || normalized.includes('10:00') || normalized === '10') {
-      bookedSlot = 'कल सुबह 10:00 AM';
-    } else if (normalized.includes('abhi') || normalized.includes('turant')) {
-      bookedSlot = 'Immediately (अगले 5-10 मिनट में)';
+      bookedSlot = isEnglish ? 'Tomorrow morning 10:00 AM' : 'कल सुबह 10:00 AM';
+    } else if (normalized.includes('abhi') || normalized.includes('turant') || normalized.includes('now')) {
+      bookedSlot = isEnglish ? 'Immediately (in next 5-10 mins)' : 'Immediately (अगले 5-10 मिनट में)';
     } else {
       bookedSlot = incomingText.trim();
     }
@@ -407,7 +410,11 @@ function handleDeterministicFallback(session, incomingText) {
     leadData.lead_temperature = 'hot';
     leadData.is_qualified = true;
 
-    replyText = `बहुत बढ़िया! ${bookedSlot} के लिए हमारे सीनियर क्लीनिकल न्यूट्रिशनिस्ट के साथ आपकी 10-मिनट की कंसल्टेशन कॉल कन्फर्म है। कृपया इस समय उपलब्ध रहें।`;
+    if (isEnglish) {
+      replyText = `Great! Your 10-minute consultation call is confirmed for ${bookedSlot} with our Senior Health Coach. Please be available on this number.`;
+    } else {
+      replyText = `बहुत बढ़िया! ${bookedSlot} के लिए हमारे सीनियर हेल्थ कोच के साथ आपकी 10-मिनट की कंसल्टेशन कॉल कन्फर्म है। कृपया इस समय उपलब्ध रहें।`;
+    }
 
     return {
       replyText: stripEmojis(replyText),
@@ -415,14 +422,21 @@ function handleDeterministicFallback(session, incomingText) {
     };
   }
 
-  // 5. Default General Fallback
+  // 4. Default General Fallback
   if (!leadData.current_weight || !leadData.height) {
-    replyText = `नमस्ते! आपका 15 kg वेट-लॉस असेसमेंट तैयार करने के लिए, बस ये 3 छोटी डिटेल्स बता दीजिए:\n\n1. आपकी उम्र (Age)?\n2. आपका वर्तमान वज़न (Weight in kg)?\n3. आपकी हाइट (Height in feet/inches या cm)?`;
+    replyText = `Hi! I am Aanya, Assistant at Diet Dekho.\n\nTo help our Senior Health Coach customize your natural weight loss assessment, please share these 3 quick details:\n\n1. Your Age?\n2. Your Current Weight (in kg)?\n3. Your Height (in feet/inches or cm)?`;
   } else if (!leadData.preferred_call_time) {
-    const slotInfo = getSuggestedCallSlots();
-    replyText = `डाइट देखो में आपका स्वागत है! हमारे सीनियर क्लीनिकल न्यूट्रिशनिस्ट से 10-मिनट की कंसल्टेशन कॉल के लिए कौन सा समय सही रहेगा:\n\n1. ${slotInfo.slot1}\n2. ${slotInfo.slot2}\n\n(या आप अपनी सुविधा का कोई भी समय बता सकते हैं)`;
+    if (isEnglish) {
+      replyText = `Welcome to Diet Dekho! Which time window works best for your 10-minute free consultation call with our Senior Health Coach:\n\n1. ${slotInfo.slot1}\n2. ${slotInfo.slot2}\n(Or feel free to share any preferred time)`;
+    } else {
+      replyText = `डाइट देखो में आपका स्वागत है! हमारे सीनियर हेल्थ कोच से 10-मिनट की फ्री कंसल्टेशन कॉल के लिए कौन सा समय सही रहेगा:\n\n1. ${slotInfo.slot1}\n2. ${slotInfo.slot2}\n(या आप अपनी सुविधा का कोई भी समय बता सकते हैं)`;
+    }
   } else {
-    replyText = `नमस्ते! आपकी 10-मिनट की कंसल्टेशन कॉल ${leadData.preferred_call_time} के लिए शेड्यूल्ड है। हमारे सीनियर न्यूट्रिशनिस्ट आपसे ठीक समय पर बात करेंगे।`;
+    if (isEnglish) {
+      replyText = `Your 10-minute consultation call is confirmed for ${leadData.preferred_call_time}. Our Senior Health Coach will connect with you on time.`;
+    } else {
+      replyText = `नमस्ते! आपकी 10-मिनट की कंसल्टेशन कॉल ${leadData.preferred_call_time} के लिए शेड्यूल्ड है। हमारे सीनियर हेल्थ कोच आपसे ठीक समय पर बात करेंगे।`;
+    }
   }
 
   return {
