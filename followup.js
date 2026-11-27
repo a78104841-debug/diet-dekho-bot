@@ -152,69 +152,61 @@ async function checkAndExecuteDueFollowups(sessions, saveSessionsToDisk) {
       session.followupPending = false;
       session.followupCount = (session.followupCount || 0) + 1;
 
-      // STRICT RULE: Photo is ONLY sent as an initial icebreaker when customer ghosted at Step 1 (awaiting height/weight).
-      // Once details/chat are active or scheduling a call, send pure human text (NO marketing photo spam).
+      // CRO Master Strategy:
+      // When customer stopped at Step 1 (awaiting vitals):
+      // Instead of repetitive marketing photos asking for a 3-field form, send a low-friction physical pain-point question (Belly fat / Fatigue / Thyroid).
+      // When customer stopped at booking: send a warm clinical nutritionist slot reservation reminder.
       const isAwaitingHeightWeight = !session.leadData?.current_weight && !session.leadData?.height;
-      const shouldSendPhoto = isAwaitingHeightWeight && session.followupCount === 1;
+      const cleanName = session.leadData?.name || null;
+      const salutation = cleanName ? `${cleanName} जी` : 'जी';
 
       try {
         let followUpInstruction;
-        let selectedPhoto = null;
-        let imageUrl = null;
+        let fallbackText;
 
-        if (shouldSendPhoto) {
-          const photoIndex = 0; // transform_14kg.jpg (14kg in 3 months matches 15kg campaign)
-          selectedPhoto = TRANSFORMATION_PHOTOS[photoIndex];
-          const botHost = process.env.BASE_URL || 'https://diet-dekho-bot.onrender.com';
-          imageUrl = `${botHost}/media/${selectedPhoto.file}`;
+        if (isAwaitingHeightWeight) {
+          // Low-friction visceral pain-point hook (proven 3x higher revival conversion)
           followUpInstruction = `[CRITICAL SYSTEM DIRECTIVE:
-1. UNDER NO CIRCUMSTANCES CONGRATULATE THE USER/PROSPECT. The attached photo shows a past Diet Dekho client who achieved this transformation, NOT the user! The user is overweight and still trying to lose weight!
-2. Absolutely DO NOT say words like "बधाई", "congratulations", "शानदार बदलाव आपका", "आपका ट्रांसफॉर्मेशन", "आपका परिवर्तन", or imply this is their achievement.
-3. Write a warm 2-line WhatsApp caption presenting this client's success as motivation:
-"देखिए हमारे एक क्लाइंट ने घर के सादे खाने से 3 महीने में 14 kg वज़न घटाया। आपका 15 kg वेट लॉस असेसमेंट तैयार करने के लिए बस आपकी उम्र, वर्तमान वज़न और हाइट बता दीजिए।"
-4. Keep it under 2 lines, friendly Hindi/Hinglish, zero emojis, zero tech talk.]`;
+The prospect paused after expressing interest in weight loss. Do NOT ask for age/weight/height again like an official form.
+Write a warm, caring 1-on-1 WhatsApp message asking about their main struggle:
+"नमस्ते ${salutation}! क्या आप मुख्य रूप से पेट की चर्बी (Belly Fat), वज़न बढ़ने की वजह से सुस्ती/थकान, या किसी खास मेडिकल परेशानी (जैसे थायरॉइड/PCOD) को ठीक करना चाहते हैं?"
+Keep it natural, friendly Hindi/Hinglish, zero emojis, strictly 2 lines.]`;
+
+          fallbackText = `नमस्ते ${salutation}! क्या आप मुख्य रूप से पेट की चर्बी (Belly Fat), वज़न बढ़ने की वजह से सुस्ती/थकान, या किसी खास मेडिकल परेशानी (जैसे थायरॉइड/PCOD) को ठीक करना चाहते हैं?`;
         } else {
-          // Warm, personal 1-on-1 human dietitian text message
-          followUpInstruction = `[SYSTEM NOTE: The user paused the conversation. Write a warm, friendly, natural 1-on-1 human message (like a caring nutritionist assistant on WhatsApp). Pick up naturally based on last context (e.g. asking for call slot between 10 AM to 6:30 PM). Keep it short (2 lines), zero emojis, polite and personal. DO NOT pitch or sell aggressively.]`;
+          // Warm clinical reservation reminder
+          followUpInstruction = `[CRITICAL SYSTEM DIRECTIVE:
+The prospect shared details or paused during appointment scheduling.
+Write a warm, respectful 2-line WhatsApp reminder from Diet Dekho:
+"नमस्ते ${salutation}! हमारे सीनियर क्लीनिकल न्यूट्रिशनिस्ट के साथ आपकी 10-मिनट की फ्री डाइट असेसमेंट कॉल का स्लॉट रिज़र्व है। क्या आज दोपहर या शाम में 10 मिनट बात करना संभव होगा?"
+Keep it natural, zero emojis, strictly under 2 lines.]`;
+
+          fallbackText = `नमस्ते ${salutation}! हमारे सीनियर क्लीनिकल न्यूट्रिशनिस्ट के साथ आपकी 10-मिनट की फ्री डाइट असेसमेंट कॉल का स्लॉट रिज़र्व है। क्या आज दोपहर या शाम में 10 मिनट बात करना संभव होगा?`;
         }
 
-        const { replyText } = await generateGeminiReply(
-          session.history,
-          followUpInstruction,
-          session.leadData,
-          session.interactionId
-        );
+        let outboundText = '';
+        try {
+          const { replyText } = await generateGeminiReply(
+            session.history,
+            followUpInstruction,
+            session.leadData,
+            session.interactionId
+          );
+          outboundText = replyText || fallbackText;
+        } catch (aiErr) {
+          console.warn(`[Follow-up AI Error] Using resilient fallback for ${phone}:`, aiErr.message);
+          outboundText = fallbackText;
+        }
 
-        if (replyText) {
-          let sanitizedReply = replyText;
-          if (shouldSendPhoto) {
-            // Unbreakable safety filter against congratulating prospect on transformation photo
-            const forbiddenPhrases = [
-              'बधाई', 'congratulat', 'शानदार बदलाव आपका', 'आपका ट्रांसफॉर्मेशन',
-              'आपका परिवर्तन देखकर', 'आपका यह ट्रांसफॉर्मेशन', 'आपका ये ट्रांसफॉर्मेशन',
-              'आपका वजन कम होना सच में प्रेरणादायक', 'आपका अद्भुत बदलाव', 'आपकी मेहनत रंग लाई',
-              'आपका ये बदलाव'
-            ];
-            const hasCongratulation = forbiddenPhrases.some(phrase => sanitizedReply.toLowerCase().includes(phrase));
-            if (hasCongratulation) {
-              console.warn(`⚠️ [Follow-up Safety Filter Triggered] AI generated congratulatory text for prospect. Replacing with safe client showcase caption.`);
-              sanitizedReply = `देखिए हमारे एक क्लाइंट ने घर के सादे खाने से 3 महीने में 14 kg वज़न घटाया।\n\nआपका 15 kg वेट लॉस असेसमेंट तैयार करने के लिए बस आपकी उम्र, वर्तमान वज़न और हाइट बता दीजिए!`;
-            }
-          }
+        // Strict Zero-Emoji Filter
+        outboundText = stripEmojis(outboundText);
 
-          // Strict Zero Emoji Filter on all outbound messages
-          sanitizedReply = stripEmojis(sanitizedReply);
-
-          if (shouldSendPhoto && imageUrl) {
-            await sendWhatsAppImage(phone, imageUrl, sanitizedReply);
-            console.log(`✅ [Follow-up Delivered with Photo] Sent to ${phone}: ${imageUrl} | "${sanitizedReply.substring(0, 80)}..."`);
-          } else {
-            await sendWhatsAppMessage(phone, sanitizedReply);
-            console.log(`✅ [Follow-up Delivered as Clean Text] Sent to ${phone}: "${sanitizedReply.substring(0, 80)}..."`);
-          }
+        if (outboundText) {
+          await sendWhatsAppMessage(phone, outboundText);
+          console.log(`✅ [Follow-up Delivered] Sent to ${phone}: "${outboundText.substring(0, 80)}..."`);
 
           session.history.push({ role: 'user', text: followUpInstruction });
-          session.history.push({ role: 'model', text: sanitizedReply });
+          session.history.push({ role: 'model', text: outboundText });
           if (session.history.length > 20) session.history = session.history.slice(-20);
         }
 

@@ -7,7 +7,7 @@ const { generateGeminiReply } = require('./gemini');
 const { sendWhatsAppMessage } = require('./whatsapp');
 const { pushLeadToNeoDove } = require('./neodove');
 const { scheduleFollowup, cancelFollowup, checkAndExecuteDueFollowups } = require('./followup');
-const { getISTTimeInfo, cleanHumanName, stripEmojis, getSuggestedCallSlots } = require('./utils');
+const { getISTTimeInfo, cleanHumanName, stripEmojis, getSuggestedCallSlots, extractVitalsDeterministically, handleDeterministicFallback } = require('./utils');
 
 const app = express();
 app.use(express.json());
@@ -425,13 +425,46 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // Call AI Engine with history, user message, and known lead memory
-    const { replyText, leadData, interactionId } = await generateGeminiReply(
-      session.history,
-      incomingText,
-      session.leadData,
-      session.interactionId
-    );
+    // Deterministic Vitals Pre-Parser (e.g. Pravin Yadav "48\n75kgd\n5 feet"):
+    // Guarantees age, weight, and height are saved immediately into leadData even before AI call
+    const detectedVitals = extractVitalsDeterministically(incomingText);
+    if (detectedVitals) {
+      session.leadData = session.leadData || {};
+      if (detectedVitals.age && !session.leadData.age) session.leadData.age = detectedVitals.age;
+      if (detectedVitals.weight && !session.leadData.current_weight) session.leadData.current_weight = detectedVitals.weight;
+      if (detectedVitals.height && !session.leadData.height) session.leadData.height = detectedVitals.height;
+      console.log(`🩺 [Deterministic Vitals Pre-Parsed] Extracted vitals for ${senderPhone}:`, detectedVitals);
+    }
+
+    // Call AI Engine with resilient fallback wrapper
+    let replyText = '';
+    let leadData = null;
+    let interactionId = null;
+
+    try {
+      const aiResponse = await generateGeminiReply(
+        session.history,
+        incomingText,
+        session.leadData,
+        session.interactionId
+      );
+      replyText = aiResponse.replyText;
+      leadData = aiResponse.leadData;
+      interactionId = aiResponse.interactionId;
+    } catch (aiError) {
+      console.error(`⚠️ [AI Engine Fallback Triggered] AI failed for ${senderPhone}: ${aiError.message}. Executing resilient deterministic fallback...`);
+      const fallbackResult = handleDeterministicFallback(session, incomingText);
+      replyText = fallbackResult.replyText;
+      leadData = fallbackResult.leadData;
+    }
+
+    // Safety: If AI reply is somehow empty or blank, execute fallback
+    if (!replyText || replyText.trim() === '') {
+      console.warn(`⚠️ [AI Empty Reply Safety] AI returned empty text for ${senderPhone}. Running fallback.`);
+      const fallbackResult = handleDeterministicFallback(session, incomingText);
+      replyText = fallbackResult.replyText;
+      leadData = fallbackResult.leadData;
+    }
 
     if (interactionId) session.interactionId = interactionId;
 
