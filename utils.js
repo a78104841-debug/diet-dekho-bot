@@ -320,6 +320,32 @@ function handleDeterministicFallback(session, incomingText) {
   const slotInfo = getSuggestedCallSlots();
   const selectedSlotText = isEnglish ? slotInfo.slotTextEnglish : slotInfo.slotTextHindi;
 
+  // 0. Check if user is asking for price / charges / fees
+  const isPricingInquiry = /\b(charges?|fees?|price|pricing|cost|kitna lagega|kitne paise|kitna charge|kitni fees|plan price|rate|subscription|package)\b/i.test(normalized);
+  if (isPricingInquiry) {
+    if (leadData.preferred_call_time) {
+      if (isEnglish) {
+        replyText = `Diet Dekho has 12 different diet plans, and each one is customized to your health profile and goals. When our team calls you (${leadData.preferred_call_time}), they will guide you on which plan suits you best, what benefits you can expect, and the pricing. If you like everything, you can join right away.`;
+      } else if (isHinglish) {
+        replyText = `Diet Dekho me 12 alag-alag diet plans hote hain, aur har plan aapki health profile aur goals ke hisab se customize hota hai. Jab hamari team aapko call karegi (${leadData.preferred_call_time}), to wo aapko acche se guide karenge ki aapke liye kaun sa plan suitable hai, usme aapko kya benefits milenge aur uske prices kya hain. Agar aapko sab kuch pasand aaye, to aap usi samay join bhi kar sakte hain.`;
+      } else {
+        replyText = `Diet Dekho में 12 अलग-अलग डाइट प्लान्स होते हैं, और हर प्लान आपकी हेल्थ प्रोफाइल और गोल्स के हिसाब से कस्टमाइज़ होता है। जब हमारी टीम आपको कॉल करेगी (${leadData.preferred_call_time}), तो वे आपको अच्छे से गाइड करेंगे कि आपके लिए कौन सा प्लान सूटेबल है, उसमें आपको क्या बेनिफिट्स मिलेंगे और उसके प्राइसेज़ क्या हैं। अगर आपको सब कुछ पसंद आए, तो आप उसी समय ज्वाइन भी कर सकते हैं।`;
+      }
+    } else {
+      if (isEnglish) {
+        replyText = `Diet Dekho has 12 different diet plans, and each one is customized to your health profile and goals. When our team calls you, they will guide you on which plan suits you best, what benefits you can expect, and the pricing. If you like everything, you can join right away.\n\nWhich time window works best for your 10-minute consultation call:\n1. ${slotInfo.slot1}\n2. ${slotInfo.slot2}`;
+      } else if (isHinglish) {
+        replyText = `Diet Dekho me 12 alag-alag diet plans hote hain, aur har plan aapki health profile aur goals ke hisab se customize hota hai. Jab hamari team aapko call karegi, to wo aapko acche se guide karenge ki aapke liye kaun sa plan suitable hai, usme aapko kya benefits milenge aur uske prices kya hain. Agar aapko sab kuch pasand aaye, to aap usi samay join bhi kar sakte hain.\n\n10-minute ki is free call ke liye kaun sa time sahi rahega:\n1. ${slotInfo.slot1}\n2. ${slotInfo.slot2}`;
+      } else {
+        replyText = `Diet Dekho में 12 अलग-अलग डाइट प्लान्स होते हैं, और हर प्लान आपकी हेल्थ प्रोफाइल और गोल्स के हिसाब से कस्टमाइज़ होता है। जब हमारी टीम आपको कॉल करेगी, तो वे आपको अच्छे से गाइड करेंगे कि आपके लिए कौन सा प्लान सूटेबल है, उसमें आपको क्या बेनिफिट्स मिलेंगे और उसके प्राइसेज़ क्या हैं। अगर आपको सब कुछ पसंद आए, तो आप उसी समय ज्वाइन भी कर सकते हैं।\n\n10-मिनट की इस फ्री कॉल के लिए कौन सा समय सही रहेगा:\n1. ${slotInfo.slot1}\n2. ${slotInfo.slot2}`;
+      }
+    }
+    return {
+      replyText: stripEmojis(replyText),
+      leadData
+    };
+  }
+
   // 1. Check if user sent vitals (Age, Weight, Height)
   const vitals = extractVitalsDeterministically(incomingText);
   if (vitals && (vitals.weight || vitals.height || vitals.age)) {

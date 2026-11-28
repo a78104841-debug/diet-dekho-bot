@@ -368,18 +368,69 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // C. For ANY other message from a customer with a booked call (e.g. "ok", "haan", "kab call aayega", "waiting", "hello", etc.):
+      // C. Check for Pricing / Charges / Fees Questions:
+      const isPricingQuery = /\b(charges?|fees?|price|pricing|cost|kitna lagega|kitne paise|kitna charge|kitni fees|plan price|rate|subscription|package)\b/i.test(normalizedInput);
+      if (isPricingQuery) {
+        console.log(`💰 [Booked Lead Pricing Query] User ${senderPhone} asked about charges: "${incomingText}". Providing official 12-plans explanation.`);
+        const callTime = session.leadData.preferred_call_time || 'तय समय';
+
+        // Language detection
+        const hasDevanagari = /[\u0900-\u097F]/.test(incomingText || '');
+        const hasHinglish = /\b(haan|nahi|nhi|theek|baje|subah|shaam|dopahar|mera|meri|mujhe|hai|hain|kuch|pet|chabi|wazan|vajan|saal|aaj|kal|turant|kitna|kaise|batao)\b/i.test(normalizedInput);
+        const isHindi = hasDevanagari;
+        const isHinglish = !hasDevanagari && hasHinglish;
+        const isEnglish = !isHindi && !isHinglish;
+
+        let pricingReply;
+        if (isEnglish) {
+          pricingReply = `Diet Dekho has 12 different diet plans, and each one is customized to your health profile and goals. When our team calls you (${callTime}), they will guide you on which plan suits you best, what benefits you can expect, and the pricing. If you like everything, you can join right away.`;
+        } else if (isHinglish) {
+          pricingReply = `Diet Dekho me 12 alag-alag diet plans hote hain, aur har plan aapki health profile aur goals ke hisab se customize hota hai. Jab hamari team aapko call karegi (${callTime}), to wo aapko acche se guide karenge ki aapke liye kaun sa plan suitable hai, usme aapko kya benefits milenge aur uske prices kya hain. Agar aapko sab kuch pasand aaye, to aap usi samay join bhi kar sakte hain.`;
+        } else {
+          pricingReply = `Diet Dekho में 12 अलग-अलग डाइट प्लान्स होते हैं, और हर प्लान आपकी हेल्थ प्रोफाइल और गोल्स के हिसाब से कस्टमाइज़ होता है। जब हमारी टीम आपको कॉल करेगी (${callTime}), तो वे आपको अच्छे से गाइड करेंगे कि आपके लिए कौन सा प्लान सूटेबल है, उसमें आपको क्या बेनिफिट्स मिलेंगे और उसके प्राइसेज़ क्या हैं। अगर आपको सब कुछ पसंद आए, तो आप उसी समय ज्वाइन भी कर सकते हैं।`;
+        }
+
+        const cleanReply = stripEmojis(pricingReply);
+        session.history.push({ role: 'user', text: incomingText });
+        session.history.push({ role: 'model', text: cleanReply });
+        session.lastUpdated = new Date();
+
+        await sendWhatsAppMessage(senderPhone, cleanReply);
+        saveSessionsToDisk();
+        return;
+      }
+
+      // D. For ANY other message from a customer with a booked call (e.g. "ok", "haan", "kab call aayega", "waiting", "hello", etc.):
       // Reassure them of the booked slot, NEVER restart discovery, and NEVER ask for vitals/details!
       const callTime = session.leadData.preferred_call_time || 'तय समय';
       const clientName = session.leadData?.name ? `${session.leadData.name} जी` : 'जी';
       console.log(`📞 [Call Already Booked Reassurance] User ${senderPhone} sent: "${incomingText}". Reassuring confirmed appointment (${callTime}) without restarting funnel.`);
 
+      const hasDevanagari = /[\u0900-\u097F]/.test(incomingText || '');
+      const hasHinglish = /\b(haan|nahi|nhi|theek|baje|subah|shaam|dopahar|mera|meri|mujhe|hai|hain|kuch|pet|chabi|wazan|vajan|saal|aaj|kal|turant)\b/i.test(normalizedInput);
+      const isHindi = hasDevanagari;
+      const isHinglish = !hasDevanagari && hasHinglish;
+      const isEnglish = !isHindi && !isHinglish;
+
       let bookedReassuranceReply;
       const affirmativeKeywords = ['yes', 'haan', 'ha', 'ok', 'okay', 'sure', 'theek hai', 'done', 'yes mam', 'yes sir', 'shukriya', 'thanks', 'thank you', 'bilkul', 'ji'];
       if (affirmativeKeywords.includes(normalizedInput)) {
-        bookedReassuranceReply = `बहुत बढ़िया! आपकी 10-मिनट की कंसल्टेशन कॉल ${callTime} के लिए कन्फर्म है। हमारे सीनियर हेल्थ एक्सपर्ट आपसे ठीक समय पर बात करेंगे।`;
+        if (isEnglish) {
+          bookedReassuranceReply = `Great! Your 10-minute consultation call is confirmed for ${callTime}. Our Senior Health Expert will connect with you directly at that time.`;
+        } else if (isHinglish) {
+          bookedReassuranceReply = `Bahut badhiya! Aapki 10-minute consultation call ${callTime} ke liye confirm hai. Hamare Senior Health Expert aapse theek samay par baat karenge.`;
+        } else {
+          bookedReassuranceReply = `बहुत बढ़िया! आपकी 10-मिनट की कंसल्टेशन कॉल ${callTime} के लिए कन्फर्म है। हमारे सीनियर हेल्थ एक्सपर्ट आपसे ठीक समय पर बात करेंगे।`;
+        }
       } else {
-        bookedReassuranceReply = `नमस्ते ${clientName}! आपकी 10-मिनट की कस्टमाइज़्ड कंसल्टेशन कॉल ${callTime} के लिए शेड्यूल्ड है। हमारे सीनियर हेल्थ एक्सपर्ट आपसे ठीक समय पर सीधे फ़ोन पर बात करेंगे। यदि आप समय बदलना चाहते हैं, तो कृपया नया समय बता दें।`;
+        if (isEnglish) {
+          const engName = session.leadData?.name ? `${session.leadData.name}` : '';
+          bookedReassuranceReply = `Hi ${engName}! Your 10-minute customized consultation call is scheduled for ${callTime}. Our Senior Health Expert will call you directly at that time. If you wish to reschedule, please let us know your preferred time.`;
+        } else if (isHinglish) {
+          bookedReassuranceReply = `Namaste ${clientName}! Aapki 10-minute customized consultation call ${callTime} ke liye scheduled hai. Hamare Senior Health Expert aapse theek samay par phone par baat karenge. Agar aap time change karna chahte hain, to kripya naya time bata dein.`;
+        } else {
+          bookedReassuranceReply = `नमस्ते ${clientName}! आपकी 10-मिनट की कस्टमाइज़्ड कंसल्टेशन कॉल ${callTime} के लिए शेड्यूल्ड है। हमारे सीनियर हेल्थ एक्सपर्ट आपसे ठीक समय पर सीधे फ़ोन पर बात करेंगे। यदि आप समय बदलना चाहते हैं, तो कृपया नया समय बता दें।`;
+        }
       }
 
       session.history.push({ role: 'user', text: incomingText });
@@ -504,6 +555,49 @@ app.post('/webhook', async (req, res) => {
       }
 
       const cleanReply = stripEmojis(paymentReply);
+      session.history.push({ role: 'user', text: incomingText });
+      session.history.push({ role: 'model', text: cleanReply });
+      session.lastUpdated = new Date();
+
+      await sendWhatsAppMessage(senderPhone, cleanReply);
+      saveSessionsToDisk();
+      return;
+    }
+
+    // Deterministic General Pricing / Charges Guard:
+    // When customer asks about price, charges, fees, or cost at any time
+    const isGeneralPricingQuery = !isRejectionOrUnqualified && /\b(charges?|fees?|price|pricing|cost|kitna lagega|kitne paise|kitna charge|kitni fees|plan price|rate|subscription|package)\b/i.test(normalizedInput);
+    if (isGeneralPricingQuery) {
+      console.log(`💰 [General Pricing Query] User ${senderPhone} asked about price: "${incomingText}". Providing official 12-plans explanation.`);
+      const callTime = session.leadData?.preferred_call_time;
+      const slotInfo = getSuggestedCallSlots();
+
+      const hasDevanagari = /[\u0900-\u097F]/.test(incomingText || '');
+      const hasHinglish = /\b(haan|nahi|nhi|theek|baje|subah|shaam|dopahar|mera|meri|mujhe|hai|hain|kuch|pet|chabi|wazan|vajan|saal|aaj|kal|turant|kitna|kaise|batao)\b/i.test(normalizedInput);
+      const isHindi = hasDevanagari;
+      const isHinglish = !hasDevanagari && hasHinglish;
+      const isEnglish = !isHindi && !isHinglish;
+
+      let pricingReply;
+      if (callTime) {
+        if (isEnglish) {
+          pricingReply = `Diet Dekho has 12 different diet plans, and each one is customized to your health profile and goals. When our team calls you (${callTime}), they will guide you on which plan suits you best, what benefits you can expect, and the pricing. If you like everything, you can join right away.`;
+        } else if (isHinglish) {
+          pricingReply = `Diet Dekho me 12 alag-alag diet plans hote hain, aur har plan aapki health profile aur goals ke hisab se customize hota hai. Jab hamari team aapko call karegi (${callTime}), to wo aapko acche se guide karenge ki aapke liye kaun sa plan suitable hai, usme aapko kya benefits milenge aur uske prices kya hain. Agar aapko sab kuch pasand aaye, to aap usi samay join bhi kar sakte hain.`;
+        } else {
+          pricingReply = `Diet Dekho में 12 अलग-अलग डाइट प्लान्स होते हैं, और हर प्लान आपकी हेल्थ प्रोफाइल और गोल्स के हिसाब से कस्टमाइज़ होता है। जब हमारी टीम आपको कॉल करेगी (${callTime}), तो वे आपको अच्छे से गाइड करेंगे कि आपके लिए कौन सा प्लान सूटेबल है, उसमें आपको क्या बेनिफिट्स मिलेंगे और उसके प्राइसेज़ क्या हैं। अगर आपको सब कुछ पसंद आए, तो आप उसी समय ज्वाइन भी कर सकते हैं।`;
+        }
+      } else {
+        if (isEnglish) {
+          pricingReply = `Diet Dekho has 12 different diet plans, and each one is customized to your health profile and goals. When our team calls you, they will guide you on which plan suits you best, what benefits you can expect, and the pricing. If you like everything, you can join right away.\n\nWhich time window works best for your 10-minute consultation call:\n${slotInfo.slotTextEnglish}`;
+        } else if (isHinglish) {
+          pricingReply = `Diet Dekho me 12 alag-alag diet plans hote hain, aur har plan aapki health profile aur goals ke hisab se customize hota hai. Jab hamari team aapko call karegi, to wo aapko acche se guide karenge ki aapke liye kaun sa plan suitable hai, usme aapko kya benefits milenge aur uske prices kya hain. Agar aapko sab kuch pasand aaye, to aap usi samay join bhi kar sakte hain.\n\n10-minute ki is free consultation call ke liye kaun sa samay aapke liye best rahega?\n${slotInfo.slotTextHindi}`;
+        } else {
+          pricingReply = `Diet Dekho में 12 अलग-अलग डाइट प्लान्स होते हैं, और हर प्लान आपकी हेल्थ प्रोफाइल और गोल्स के हिसाब से कस्टमाइज़ होता है। जब हमारी टीम आपको कॉल करेगी, तो वे आपको अच्छे से गाइड करेंगे कि आपके लिए कौन सा प्लान सूटेबल है, उसमें आपको क्या बेनिफिट्स मिलेंगे और उसके प्राइसेज़ क्या हैं। अगर आपको सब कुछ पसंद आए, तो आप उसी समय ज्वाइन भी कर सकते हैं।\n\n10-मिनट की इस फ्री कंसल्टेशन कॉल के लिए कौन सा समय आपके लिए सबसे सही रहेगा?\n${slotInfo.slotTextHindi}`;
+        }
+      }
+
+      const cleanReply = stripEmojis(pricingReply);
       session.history.push({ role: 'user', text: incomingText });
       session.history.push({ role: 'model', text: cleanReply });
       session.lastUpdated = new Date();
